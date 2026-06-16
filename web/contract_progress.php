@@ -37,28 +37,7 @@ function contract_progress_emit(array $payload): void
 
 function contract_progress_count_rows(string $company, string $entitySet, string $filter, int $ttl = 3600): ?int
 {
-    global $baseUrl;
-
-    if ($filter === '') {
-        return 0;
-    }
-
-    try {
-        $environment = auth_get_environment_for_company($company, $ttl);
-        $auth = auth_get_auth_for_environment($environment);
-        $url = contract_company_entity_url($baseUrl, $environment, $company, $entitySet, [
-            '$filter' => $filter,
-            '$count' => 'true',
-            '$top' => '0',
-        ]);
-        $response = odata_get_json($url, $auth);
-        if (isset($response['@odata.count'])) {
-            return max(0, (int) $response['@odata.count']);
-        }
-    } catch (Throwable $ignored) {
-    }
-
-    return null;
+    return contract_count_entity_rows($company, $entitySet, $filter, $ttl);
 }
 
 function contract_progress_emit_step_plan(array $stepIds): void
@@ -90,6 +69,7 @@ function contract_progress_search_customers_by_name(string $company, string $que
     $seen = [];
     $customers = [];
     foreach ($filters as $stepId => $filter) {
+        contract_progress_emit_step($stepId, 'start');
         $rows = contract_try_fetch_rows($company, 'AppCustomerCard', [
             '$select' => 'No,Name,Search_Name',
             '$filter' => $filter,
@@ -124,14 +104,7 @@ function contract_progress_search(string $company, string $query, int $ttl = 360
         return ['kind' => 'empty', 'message_key' => 'contract.error.query_required'];
     }
 
-    contract_progress_emit_step_plan([
-        'search_contract',
-        'search_workorders',
-        'search_customer',
-        'search_customers_name',
-        'search_customers_searchname',
-    ]);
-
+    contract_progress_emit_step('search_contract', 'start');
     $contract = contract_fetch_contract_by_no($company, $query, $ttl);
     contract_progress_emit_step('search_contract', 'done');
     if ($contract !== null) {
@@ -143,6 +116,7 @@ function contract_progress_search(string $company, string $query, int $ttl = 360
         ];
     }
 
+    contract_progress_emit_step('search_workorders', 'start');
     $existsOnWorkorders = contract_contract_exists_on_workorders($company, $query, $ttl);
     contract_progress_emit_step('search_workorders', 'done');
     if ($existsOnWorkorders) {
@@ -163,10 +137,10 @@ function contract_progress_search(string $company, string $query, int $ttl = 360
         ];
     }
 
+    contract_progress_emit_step('search_customer', 'start');
     $customer = contract_fetch_customer_by_no($company, $query, $ttl);
     contract_progress_emit_step('search_customer', 'done');
     if ($customer !== null) {
-        contract_progress_emit_step_plan(['contracts']);
         contract_progress_emit_step('contracts', 'start');
         $contracts = contract_fetch_contracts_for_customer($company, $customer['no'], $ttl);
         contract_progress_emit_step('contracts', 'done');
@@ -185,7 +159,6 @@ function contract_progress_search(string $company, string $query, int $ttl = 360
 
     if (count($customers) === 1) {
         $single = $customers[0];
-        contract_progress_emit_step_plan(['contracts']);
         contract_progress_emit_step('contracts', 'start');
         $contracts = contract_fetch_contracts_for_customer($company, $single['no'], $ttl);
         contract_progress_emit_step('contracts', 'done');
@@ -205,49 +178,6 @@ function contract_progress_search(string $company, string $query, int $ttl = 360
 
 function contract_progress_load_detail(string $company, string $contractNo, int $ttl = 3600, bool $skipContractFetch = false): array
 {
-    $escaped = contract_escape_odata_string($contractNo);
-    $contractFilter = $escaped !== '' ? "Contract_No eq '" . $escaped . "'" : '';
-
-    $countStepPlan = [];
-    if (!$skipContractFetch) {
-        $countStepPlan[] = 'contract';
-    }
-    if ($contractFilter !== '') {
-        $countStepPlan[] = 'count_workorders';
-        $countStepPlan[] = 'count_tasks';
-    }
-    contract_progress_emit_step_plan($countStepPlan);
-
-    $workorderRowCount = null;
-    $taskRowCount = null;
-    if ($contractFilter !== '') {
-        contract_progress_emit_step('count_workorders', 'start');
-        $workorderRowCount = contract_progress_count_rows($company, 'LVS_MainWorkOrderCard', $contractFilter, $ttl);
-        contract_progress_emit_step('count_workorders', 'done');
-
-        contract_progress_emit_step('count_tasks', 'start');
-        $taskRowCount = contract_progress_count_rows($company, 'AppComponentCardTasks', $contractFilter, $ttl);
-        contract_progress_emit_step('count_tasks', 'done');
-    }
-
-    $fetchStepPlan = [];
-    if (!$skipContractFetch) {
-        $fetchStepPlan[] = 'contract';
-    }
-    if ($workorderRowCount !== null && $workorderRowCount > 0) {
-        $fetchStepPlan = array_merge(
-            $fetchStepPlan,
-            contract_build_progress_chunk_step_ids('workorders', $workorderRowCount)
-        );
-    }
-    if ($taskRowCount !== null && $taskRowCount > 0) {
-        $fetchStepPlan = array_merge(
-            $fetchStepPlan,
-            contract_build_progress_chunk_step_ids('tasks', $taskRowCount)
-        );
-    }
-    contract_progress_emit_step_plan($fetchStepPlan);
-
     return contract_get_detail(
         $company,
         $contractNo,
@@ -264,7 +194,6 @@ function contract_progress_load_detail(string $company, string $contractNo, int 
 
 function contract_progress_load_companies(int $ttl = 3600): array
 {
-    contract_progress_emit_step_plan(['companies']);
     contract_progress_emit_step('companies', 'start');
     $companies = contract_companies_for_page($ttl);
     contract_progress_emit_step('companies', 'done');
@@ -312,7 +241,6 @@ try {
     if ($contractNo !== '') {
         $contractDetailResult = contract_progress_load_detail($company, $contractNo);
     } elseif ($customerNo !== '') {
-        contract_progress_emit_step_plan(['customer', 'contracts']);
         contract_progress_emit_step('customer', 'start');
         contract_fetch_customer_by_no($company, $customerNo);
         contract_progress_emit_step('customer', 'done');
@@ -340,7 +268,7 @@ try {
     $pageState = contract_load_page_state($company, $contractNo, $customerNo, $searchQuery, 3600, $contractDetailResult);
     contract_portal_store_prefetch($prefetchKey, $pageState);
 
-    contract_progress_emit_step_plan(['pagina']);
+    contract_progress_emit_step('pagina', 'start');
     contract_progress_emit_step('pagina', 'done');
     contract_progress_emit(['complete' => true]);
 } catch (Throwable $loadError) {

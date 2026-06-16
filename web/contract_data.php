@@ -11,6 +11,7 @@ require_once __DIR__ . '/odata.php';
  */
 const CONTRACT_FETCH_PROGRESS_CHUNK_SIZE = 5;
 const CONTRACT_FETCH_COMPONENT_CARD_CHUNK_SIZE = 20;
+const CONTRACT_FETCH_MAX_ROWS = 500;
 const CONTRACT_LOAD_TIME_LIMIT_SECONDS = 10800;
 
 /**
@@ -30,6 +31,50 @@ function contract_build_progress_chunk_step_ids(string $prefix, int $itemCount, 
     }
 
     return $stepIds;
+}
+
+function contract_count_entity_rows(string $company, string $entitySet, string $filter, int $ttl = 3600): ?int
+{
+    global $baseUrl;
+
+    if ($filter === '') {
+        return 0;
+    }
+
+    try {
+        $environment = auth_get_environment_for_company($company, $ttl);
+        $auth = auth_get_auth_for_environment($environment);
+        $url = contract_company_entity_url($baseUrl, $environment, $company, $entitySet, [
+            '$filter' => $filter,
+            '$count' => 'true',
+            '$top' => '0',
+        ]);
+        $response = odata_get_json($url, $auth);
+        if (isset($response['@odata.count'])) {
+            return max(0, (int) $response['@odata.count']);
+        }
+    } catch (Throwable $ignored) {
+    }
+
+    return null;
+}
+
+function contract_emit_accurate_chunk_plan(
+    ?callable $emitStepPlan,
+    string $prefix,
+    ?int $itemCount,
+    int $chunkSize = CONTRACT_FETCH_PROGRESS_CHUNK_SIZE,
+    ?int $maxRows = CONTRACT_FETCH_MAX_ROWS
+): void {
+    if ($emitStepPlan === null || $itemCount === null || $itemCount <= 0) {
+        return;
+    }
+
+    $itemsToFetch = $maxRows === null ? $itemCount : min($itemCount, $maxRows);
+    $stepIds = contract_build_progress_chunk_step_ids($prefix, $itemsToFetch, $chunkSize);
+    if ($stepIds !== []) {
+        $emitStepPlan($stepIds);
+    }
 }
 
 function contract_chunk_progress_emit(?callable $emitChunk, string $step, string $status): void
@@ -308,8 +353,13 @@ function contract_workorder_has_report_links(array $workorder): bool
         || trim((string) ($workorder['excel_url'] ?? '')) !== '';
 }
 
-function contract_fetch_workorders_for_contract(string $company, string $contractNo, int $ttl = 3600, ?callable $emitChunk = null): array
-{
+function contract_fetch_workorders_for_contract(
+    string $company,
+    string $contractNo,
+    int $ttl = 3600,
+    ?callable $emitChunk = null,
+    ?callable $emitStepPlan = null
+): array {
     $escaped = contract_escape_odata_string($contractNo);
     if ($escaped === '') {
         return [];
@@ -323,7 +373,7 @@ function contract_fetch_workorders_for_contract(string $company, string $contrac
 
     $workorders = [];
     if ($emitChunk === null) {
-        $rows = contract_try_fetch_rows($company, 'LVS_MainWorkOrderCard', $query + ['$top' => '500'], $ttl);
+        $rows = contract_try_fetch_rows($company, 'LVS_MainWorkOrderCard', $query + ['$top' => (string) CONTRACT_FETCH_MAX_ROWS], $ttl);
         foreach ($rows as $row) {
             if (!is_array($row)) {
                 continue;
@@ -335,11 +385,18 @@ function contract_fetch_workorders_for_contract(string $company, string $contrac
         }
     } else {
         $chunkSize = CONTRACT_FETCH_PROGRESS_CHUNK_SIZE;
+        $maxRows = CONTRACT_FETCH_MAX_ROWS;
+        contract_emit_accurate_chunk_plan(
+            $emitStepPlan,
+            'workorders',
+            contract_count_entity_rows($company, 'LVS_MainWorkOrderCard', $query['$filter'], $ttl)
+        );
+
         $skip = 0;
         $chunkIndex = 0;
-        $maxRows = 500;
+        $rawRowsFetched = 0;
 
-        while (count($workorders) < $maxRows) {
+        while ($rawRowsFetched < $maxRows) {
             $stepId = 'workorders_' . $chunkIndex;
             contract_chunk_progress_emit($emitChunk, $stepId, 'start');
             $rows = contract_try_fetch_rows($company, 'LVS_MainWorkOrderCard', $query + [
@@ -358,7 +415,8 @@ function contract_fetch_workorders_for_contract(string $company, string $contrac
             }
             contract_chunk_progress_emit($emitChunk, $stepId, 'done');
 
-            if ($rows === [] || count($rows) < $chunkSize || count($workorders) >= $maxRows) {
+            $rawRowsFetched += count($rows);
+            if ($rows === [] || count($rows) < $chunkSize || $rawRowsFetched >= $maxRows) {
                 break;
             }
 
@@ -374,8 +432,13 @@ function contract_fetch_workorders_for_contract(string $company, string $contrac
     return $workorders;
 }
 
-function contract_fetch_component_tasks_for_contract(string $company, string $contractNo, int $ttl = 3600, ?callable $emitChunk = null): array
-{
+function contract_fetch_component_tasks_for_contract(
+    string $company,
+    string $contractNo,
+    int $ttl = 3600,
+    ?callable $emitChunk = null,
+    ?callable $emitStepPlan = null
+): array {
     $escaped = contract_escape_odata_string($contractNo);
     if ($escaped === '') {
         return [];
@@ -388,15 +451,22 @@ function contract_fetch_component_tasks_for_contract(string $company, string $co
 
     $tasks = [];
     if ($emitChunk === null) {
-        $rows = contract_try_fetch_rows($company, 'AppComponentCardTasks', $query + ['$top' => '500'], $ttl);
+        $rows = contract_try_fetch_rows($company, 'AppComponentCardTasks', $query + ['$top' => (string) CONTRACT_FETCH_MAX_ROWS], $ttl);
     } else {
         $chunkSize = CONTRACT_FETCH_PROGRESS_CHUNK_SIZE;
+        $maxRows = CONTRACT_FETCH_MAX_ROWS;
+        contract_emit_accurate_chunk_plan(
+            $emitStepPlan,
+            'tasks',
+            contract_count_entity_rows($company, 'AppComponentCardTasks', $query['$filter'], $ttl)
+        );
+
         $skip = 0;
         $chunkIndex = 0;
-        $maxRows = 500;
+        $rawRowsFetched = 0;
         $rows = [];
 
-        while (count($tasks) < $maxRows) {
+        while ($rawRowsFetched < $maxRows) {
             $stepId = 'tasks_' . $chunkIndex;
             contract_chunk_progress_emit($emitChunk, $stepId, 'start');
             $rows = contract_try_fetch_rows($company, 'AppComponentCardTasks', $query + [
@@ -422,36 +492,33 @@ function contract_fetch_component_tasks_for_contract(string $company, string $co
             }
             contract_chunk_progress_emit($emitChunk, $stepId, 'done');
 
-            if ($rows === [] || count($rows) < $chunkSize || count($tasks) >= $maxRows) {
+            $rawRowsFetched += count($rows);
+            if ($rows === [] || count($rows) < $chunkSize || $rawRowsFetched >= $maxRows) {
                 break;
             }
 
             $skip += $chunkSize;
             $chunkIndex++;
         }
-
-        usort($tasks, static function (array $left, array $right): int {
-            return strcasecmp((string) ($left['component_no'] ?? ''), (string) ($right['component_no'] ?? ''));
-        });
-
-        return $tasks;
     }
 
-    foreach ($rows as $row) {
-        if (!is_array($row)) {
-            continue;
+    if ($emitChunk === null) {
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $componentNo = trim((string) ($row['Component_No'] ?? ''));
+            if ($componentNo === '') {
+                continue;
+            }
+            $tasks[] = [
+                'component_no' => $componentNo,
+                'task_code' => trim((string) ($row['Task_Code'] ?? '')),
+                'description' => trim((string) ($row['Description'] ?? '')),
+                'main_entity' => trim((string) ($row['Main_Entity'] ?? '')),
+                'contract_status' => trim((string) ($row['Contract_Status'] ?? '')),
+            ];
         }
-        $componentNo = trim((string) ($row['Component_No'] ?? ''));
-        if ($componentNo === '') {
-            continue;
-        }
-        $tasks[] = [
-            'component_no' => $componentNo,
-            'task_code' => trim((string) ($row['Task_Code'] ?? '')),
-            'description' => trim((string) ($row['Description'] ?? '')),
-            'main_entity' => trim((string) ($row['Main_Entity'] ?? '')),
-            'contract_status' => trim((string) ($row['Contract_Status'] ?? '')),
-        ];
     }
 
     usort($tasks, static function (array $left, array $right): int {
@@ -480,9 +547,7 @@ function contract_fetch_component_cards(
     $chunks = array_chunk($componentNos, $chunkSize);
     $byNo = [];
 
-    if ($emitStepPlan !== null) {
-        $emitStepPlan(contract_build_progress_chunk_step_ids('components', count($componentNos), $chunkSize));
-    }
+    contract_emit_accurate_chunk_plan($emitStepPlan, 'components', count($componentNos), $chunkSize, null);
 
     foreach ($chunks as $chunkIndex => $chunk) {
         $stepId = 'components_' . $chunkIndex;
@@ -600,8 +665,8 @@ function contract_get_detail(
     $contract = $skipContractFetch ? null : contract_fetch_contract_by_no($company, $contractNo, $ttl);
     $emit('contract', 'done');
 
-    $workorders = contract_fetch_workorders_for_contract($company, $contractNo, $ttl, $emitChunk);
-    $tasks = contract_fetch_component_tasks_for_contract($company, $contractNo, $ttl, $emitChunk);
+    $workorders = contract_fetch_workorders_for_contract($company, $contractNo, $ttl, $emitChunk, $emitStepPlan);
+    $tasks = contract_fetch_component_tasks_for_contract($company, $contractNo, $ttl, $emitChunk, $emitStepPlan);
 
     if ($contract === null && $workorders === [] && $tasks === []) {
         return ['error_key' => 'contract.error.contract_not_found'];

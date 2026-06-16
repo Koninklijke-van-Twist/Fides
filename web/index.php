@@ -596,19 +596,14 @@ try {
     }
 
     function shouldResetStoredSteps(targetUrl) {
-        var hasQuery = !!(targetUrl.searchParams.get('q') || '');
-        var hasCustomer = !!(targetUrl.searchParams.get('customer') || '');
-        var hasContract = !!(targetUrl.searchParams.get('contract') || '');
-
-        if (!hasQuery && !hasCustomer && !hasContract) {
-            return true;
-        }
-
         var currentUrl = new URL(window.location.href);
-        var targetCompany = targetUrl.searchParams.get('company') || '';
-        var currentCompany = currentUrl.searchParams.get('company') || '';
-        if (targetCompany !== '' && currentCompany !== '' && targetCompany !== currentCompany) {
-            return true;
+        var keys = ['company', 'customer', 'contract', 'q'];
+
+        for (var index = 0; index < keys.length; index += 1) {
+            var key = keys[index];
+            if ((targetUrl.searchParams.get(key) || '') !== (currentUrl.searchParams.get(key) || '')) {
+                return true;
+            }
         }
 
         return false;
