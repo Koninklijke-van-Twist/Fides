@@ -50,6 +50,7 @@ jobs:
           mirror -R --delete \
             --exclude-glob .htaccess \
             --exclude-glob cache/** \
+            --exclude-glob data/** \
             --exclude-glob auth.php \
             ./web .
 

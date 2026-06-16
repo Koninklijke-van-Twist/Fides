@@ -221,7 +221,7 @@ function getUserPrefsPath(string $email): ?string
     if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
         return null;
     }
-    $dir = __DIR__ . '/../data/user_prefs';
+    $dir = __DIR__ . '/data/user_prefs';
     $filename = preg_replace('/[^a-z0-9._\-]/', '_', $email) . '.json';
     return $dir . '/' . $filename;
 }
