@@ -588,6 +588,95 @@ function contract_fetch_component_cards(
     return $byNo;
 }
 
+function contract_normalize_entity_feature_row(array $row): array
+{
+    return [
+        'source_id' => trim((string) ($row['Source_ID'] ?? '')),
+        'feature_code' => trim((string) ($row['Feature_Code'] ?? '')),
+        'feature_description' => trim((string) ($row['Feature_Description'] ?? '')),
+        'value' => trim((string) ($row['Value'] ?? '')),
+    ];
+}
+
+function contract_fetch_entity_features_for_components(
+    string $company,
+    array $componentNos,
+    int $ttl = 3600,
+    ?callable $emitChunk = null,
+    ?callable $emitStepPlan = null
+): array {
+    $componentNos = array_values(array_unique(array_filter(array_map(static function ($value): string {
+        return trim((string) $value);
+    }, $componentNos))));
+
+    if ($componentNos === []) {
+        return [];
+    }
+
+    $chunkSize = $emitChunk !== null ? CONTRACT_FETCH_PROGRESS_CHUNK_SIZE : CONTRACT_FETCH_COMPONENT_CARD_CHUNK_SIZE;
+    $chunks = array_chunk($componentNos, $chunkSize);
+    $bySourceId = [];
+
+    contract_emit_accurate_chunk_plan($emitStepPlan, 'features', count($componentNos), $chunkSize, null);
+
+    foreach ($chunks as $chunkIndex => $chunk) {
+        $stepId = 'features_' . $chunkIndex;
+        contract_chunk_progress_emit($emitChunk, $stepId, 'start');
+
+        $filters = [];
+        foreach ($chunk as $componentNo) {
+            $filters[] = "Source_ID eq '" . contract_escape_odata_string($componentNo) . "'";
+        }
+
+        $rows = contract_try_fetch_rows($company, 'LVS_EntityFeaturesSub', [
+            '$select' => 'Source_ID,Feature_Code,Feature_Description,Value',
+            '$filter' => '(' . implode(' or ', $filters) . ')',
+            '$top' => '500',
+        ], $ttl);
+
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $normalized = contract_normalize_entity_feature_row($row);
+            $sourceId = $normalized['source_id'];
+            if ($sourceId === '') {
+                continue;
+            }
+            if (!isset($bySourceId[$sourceId])) {
+                $bySourceId[$sourceId] = [];
+            }
+            $bySourceId[$sourceId][] = $normalized;
+        }
+
+        contract_chunk_progress_emit($emitChunk, $stepId, 'done');
+    }
+
+    foreach ($bySourceId as $sourceId => $features) {
+        usort($features, static function (array $left, array $right): int {
+            return strcasecmp((string) ($left['feature_description'] ?? ''), (string) ($right['feature_description'] ?? ''));
+        });
+        $bySourceId[$sourceId] = $features;
+    }
+
+    return $bySourceId;
+}
+
+function contract_attach_features_to_component_groups(array $groups, array $featuresByComponent): array
+{
+    foreach ($groups as $index => $group) {
+        if (!is_array($group)) {
+            continue;
+        }
+        $componentNo = (string) ($group['component_no'] ?? '');
+        $groups[$index]['features'] = is_array($featuresByComponent[$componentNo] ?? null)
+            ? $featuresByComponent[$componentNo]
+            : [];
+    }
+
+    return $groups;
+}
+
 function contract_build_component_groups(array $workorders, array $tasks, array $componentCards): array
 {
     $groups = [];
@@ -603,6 +692,7 @@ function contract_build_component_groups(array $workorders, array $tasks, array 
                 'card' => $componentCards[$componentNo] ?? null,
                 'tasks' => [],
                 'workorders' => [],
+                'features' => [],
             ];
         }
         $groups[$componentNo]['tasks'][] = $task;
@@ -619,6 +709,7 @@ function contract_build_component_groups(array $workorders, array $tasks, array 
                 'card' => $componentCards[$componentNo] ?? null,
                 'tasks' => [],
                 'workorders' => [],
+                'features' => [],
             ];
         }
         $groups[$componentNo]['workorders'][] = $workorder;
@@ -695,10 +786,21 @@ function contract_get_detail(
 
     $componentCards = contract_fetch_component_cards($company, $componentNos, $ttl, $emitChunk, $emitStepPlan);
 
+    $featuresByComponent = contract_fetch_entity_features_for_components(
+        $company,
+        $componentNos,
+        $ttl,
+        $emitChunk,
+        $emitStepPlan
+    );
+
     return [
         'contract' => $contract,
         'workorders' => $workorders,
-        'components' => contract_build_component_groups($workorders, $tasks, $componentCards),
+        'components' => contract_attach_features_to_component_groups(
+            contract_build_component_groups($workorders, $tasks, $componentCards),
+            $featuresByComponent
+        ),
     ];
 }
 

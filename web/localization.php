@@ -70,6 +70,14 @@ const TRANSLATIONS = [
         'contract.label.filter_detail' => 'Filter',
         'contract.placeholder.filter_detail' => 'Component-, werkorder- of serienummer',
         'contract.empty.filter' => 'Geen resultaten voor deze filter.',
+        'contract.btn.export' => 'Export',
+        'contract.export.col.field' => 'Veld',
+        'contract.export.col.value' => 'Waarde',
+        'contract.export.col.contract_no' => 'Contractnummer',
+        'contract.export.col.period_from' => 'Periode van',
+        'contract.export.col.period_to' => 'Periode tot',
+        'contract.export.col.feature_code' => 'Feature_Code',
+        'contract.export.col.feature_value' => 'Value',
     ],
 
     'en' => [
@@ -116,6 +124,14 @@ const TRANSLATIONS = [
         'contract.label.filter_detail' => 'Filter',
         'contract.placeholder.filter_detail' => 'Component, work order or serial number',
         'contract.empty.filter' => 'No results for this filter.',
+        'contract.btn.export' => 'Export',
+        'contract.export.col.field' => 'Field',
+        'contract.export.col.value' => 'Value',
+        'contract.export.col.contract_no' => 'Contract number',
+        'contract.export.col.period_from' => 'Period from',
+        'contract.export.col.period_to' => 'Period to',
+        'contract.export.col.feature_code' => 'Feature_Code',
+        'contract.export.col.feature_value' => 'Value',
     ],
 
     'de' => [
@@ -162,6 +178,14 @@ const TRANSLATIONS = [
         'contract.label.filter_detail' => 'Filter',
         'contract.placeholder.filter_detail' => 'Komponenten-, Arbeitsauftrags- oder Seriennummer',
         'contract.empty.filter' => 'Keine Ergebnisse für diesen Filter.',
+        'contract.btn.export' => 'Export',
+        'contract.export.col.field' => 'Feld',
+        'contract.export.col.value' => 'Wert',
+        'contract.export.col.contract_no' => 'Vertragsnummer',
+        'contract.export.col.period_from' => 'Zeitraum von',
+        'contract.export.col.period_to' => 'Zeitraum bis',
+        'contract.export.col.feature_code' => 'Feature_Code',
+        'contract.export.col.feature_value' => 'Value',
     ],
 
     'fr' => [
@@ -208,6 +232,14 @@ const TRANSLATIONS = [
         'contract.label.filter_detail' => 'Filtre',
         'contract.placeholder.filter_detail' => 'N° composant, ordre de travail ou n° de série',
         'contract.empty.filter' => 'Aucun résultat pour ce filtre.',
+        'contract.btn.export' => 'Export',
+        'contract.export.col.field' => 'Champ',
+        'contract.export.col.value' => 'Valeur',
+        'contract.export.col.contract_no' => 'Numéro de contrat',
+        'contract.export.col.period_from' => 'Période du',
+        'contract.export.col.period_to' => 'Période au',
+        'contract.export.col.feature_code' => 'Feature_Code',
+        'contract.export.col.feature_value' => 'Value',
     ],
 ];
 

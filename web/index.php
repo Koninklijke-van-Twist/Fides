@@ -105,6 +105,56 @@ function portal_filter_workorders_with_reports(array $workorders): array
     }));
 }
 
+function portal_render_component_features(array $features): string
+{
+    if ($features === []) {
+        return '';
+    }
+
+    $items = [];
+    foreach ($features as $feature) {
+        if (!is_array($feature)) {
+            continue;
+        }
+        $description = trim((string) ($feature['feature_description'] ?? ''));
+        $value = trim((string) ($feature['value'] ?? ''));
+        $code = trim((string) ($feature['feature_code'] ?? ''));
+        if ($description === '' && $value === '' && $code === '') {
+            continue;
+        }
+
+        $label = $description !== '' ? $description : $code;
+        $text = portal_h($label);
+        if ($value !== '') {
+            $text .= ': <strong>' . portal_h($value) . '</strong>';
+        }
+        if ($code !== '' && false) {
+            $text .= ' - <span class="contract-feature-code">' . portal_h($code) . '</span>';
+        }
+        $items[] = '<li>' . $text . '</li>';
+    }
+
+    if ($items === []) {
+        return '';
+    }
+
+    return '<ul class="contract-feature-list">' . implode('', $items) . '</ul>';
+}
+
+function portal_export_url(string $company, string $contractNo): string
+{
+    $query = [
+        'company' => $company,
+        'contract' => $contractNo,
+    ];
+    $lang = trim((string) ($_GET['lang'] ?? ''));
+    if ($lang !== '') {
+        $query['lang'] = $lang;
+    }
+
+    return 'contract_export.php?' . http_build_query($query, '', '&', PHP_QUERY_RFC3986);
+}
+
 /**
  * Page load
  */
@@ -197,6 +247,17 @@ try {
     $errorKey = 'contract.error.load_failed';
 }
 
+$showContractExport = false;
+$exportContractNo = $contractNo;
+if ($view === 'contract' && is_array($contractDetail)) {
+    $exportContractRow = is_array($contractDetail['contract'] ?? null) ? $contractDetail['contract'] : [];
+    $exportContractNo = trim((string) ($exportContractRow['contract_no'] ?? $contractNo));
+    $exportWorkordersForButton = portal_filter_workorders_with_reports(
+        is_array($contractDetail['workorders'] ?? null) ? $contractDetail['workorders'] : []
+    );
+    $showContractExport = $exportWorkordersForButton !== [];
+}
+
 ?><!DOCTYPE html>
 <html lang="<?= portal_h(getHtmlLang()) ?>">
 <head>
@@ -211,6 +272,11 @@ try {
         .contract-page { max-width: 960px; margin: 0 auto; padding: 16px; }
         .contract-header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 20px; }
         .contract-header img { max-height: 42px; width: auto; }
+        .contract-header-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-left: auto; }
+        .contract-btn-export { background: #16a34a; border-color: #16a34a; color: #fff; white-space: nowrap; }
+        .contract-btn-export:hover { background: #15803d; border-color: #15803d; color: #fff; }
+        .contract-feature-list { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 4px; }
+        .contract-feature-code { color: var(--kvt-muted); font-size: 0.85em; }
         .contract-card { background: var(--kvt-panel-bg); border: 1px solid var(--kvt-line); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
         .contract-card h2, .contract-card h3 { margin: 0 0 12px; color: var(--kvt-text); }
         .contract-form { display: grid; gap: 12px; }
@@ -336,7 +402,12 @@ try {
 <div class="contract-page">
     <header class="contract-header">
         <img src="logo-website.png" alt="KVT">
-        <?php renderLanguageSwitcher(); ?>
+        <div class="contract-header-actions">
+            <?php if ($showContractExport): ?>
+                <a class="contract-btn contract-btn-export" href="<?= portal_h(portal_export_url($company, $exportContractNo)) ?>"><?= portal_h(LOC('contract.btn.export')) ?></a>
+            <?php endif; ?>
+            <?php renderLanguageSwitcher(); ?>
+        </div>
     </header>
 
     <section class="contract-card">
@@ -496,6 +567,13 @@ try {
                                 · <?= portal_h(LOC('contract.col.serial')) ?> <?= portal_h((string) $card['serial_no']) ?>
                             <?php endif; ?>
                         </div>
+                        <?php
+                        $groupFeatures = is_array($group['features'] ?? null) ? $group['features'] : [];
+                        $featuresHtml = portal_render_component_features($groupFeatures);
+                        if ($featuresHtml !== ''):
+                        ?>
+                            <?= $featuresHtml ?>
+                        <?php endif; ?>
                         <?php if ($groupTasks !== []): ?>
                             <p class="contract-muted"><?= portal_h(LOC('contract.tasks.count', (string) count($groupTasks))) ?></p>
                         <?php endif; ?>
