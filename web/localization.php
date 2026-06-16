@@ -67,6 +67,9 @@ const TRANSLATIONS = [
         'contract.workorders.count' => '%s werkorders',
         'contract.loader.wait' => 'Even geduld...',
         'contract.loader.loading' => 'Gegevens ophalen uit Business Central',
+        'contract.label.filter_detail' => 'Filter',
+        'contract.placeholder.filter_detail' => 'Component-, werkorder- of serienummer',
+        'contract.empty.filter' => 'Geen resultaten voor deze filter.',
     ],
 
     'en' => [
@@ -110,6 +113,9 @@ const TRANSLATIONS = [
         'contract.workorders.count' => '%s work orders',
         'contract.loader.wait' => 'Please wait...',
         'contract.loader.loading' => 'Fetching data from Business Central',
+        'contract.label.filter_detail' => 'Filter',
+        'contract.placeholder.filter_detail' => 'Component, work order or serial number',
+        'contract.empty.filter' => 'No results for this filter.',
     ],
 
     'de' => [
@@ -153,6 +159,9 @@ const TRANSLATIONS = [
         'contract.workorders.count' => '%s Arbeitsaufträge',
         'contract.loader.wait' => 'Bitte warten...',
         'contract.loader.loading' => 'Daten werden aus Business Central geladen',
+        'contract.label.filter_detail' => 'Filter',
+        'contract.placeholder.filter_detail' => 'Komponenten-, Arbeitsauftrags- oder Seriennummer',
+        'contract.empty.filter' => 'Keine Ergebnisse für diesen Filter.',
     ],
 
     'fr' => [
@@ -196,6 +205,9 @@ const TRANSLATIONS = [
         'contract.workorders.count' => '%s ordres de travail',
         'contract.loader.wait' => 'Veuillez patienter...',
         'contract.loader.loading' => 'Récupération des données depuis Business Central',
+        'contract.label.filter_detail' => 'Filtre',
+        'contract.placeholder.filter_detail' => 'N° composant, ordre de travail ou n° de série',
+        'contract.empty.filter' => 'Aucun résultat pour ce filtre.',
     ],
 ];
 

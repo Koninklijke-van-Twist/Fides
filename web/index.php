@@ -235,6 +235,13 @@ try {
         table.contract-table th { color: var(--kvt-muted); font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.03em; }
         .contract-link { color: var(--kvt-main-blue); font-weight: 700; text-decoration: none; }
         .contract-subtitle { color: var(--kvt-muted); margin: 6px 0 0; }
+        .contract-filter-bar { margin-bottom: 16px; }
+        .contract-filter-bar label { display: grid; gap: 6px; font-weight: 700; color: var(--kvt-muted); }
+        .contract-filter-bar input { font: inherit; border-radius: 10px; border: 1px solid var(--kvt-line); padding: 12px 14px; width: 100%; box-sizing: border-box; }
+        .contract-component.is-filter-hidden,
+        .contract-table tr.is-filter-hidden { display: none; }
+        .contract-filter-empty { display: none; margin: 0; }
+        .contract-filter-empty.is-visible { display: block; }
         @media (min-width: 640px) {
             .contract-form-grid { grid-template-columns: 1fr 2fr auto; align-items: end; }
             .contract-form-grid .contract-btn { width: auto; min-width: 120px; }
@@ -454,17 +461,34 @@ try {
             </div>
         </section>
 
-        <section class="contract-card">
+        <section class="contract-card" id="contract-detail-filter">
             <h2><?= portal_h(LOC('contract.section.components')) ?></h2>
             <?php if ($components === []): ?>
                 <p class="contract-muted"><?= portal_h(LOC('contract.empty.components')) ?></p>
             <?php else: ?>
+            <div class="contract-filter-bar">
+                <label for="contract-detail-filter-input">
+                    <?= portal_h(LOC('contract.label.filter_detail')) ?>
+                    <input
+                        type="search"
+                        id="contract-detail-filter-input"
+                        autocomplete="off"
+                        placeholder="<?= portal_h(LOC('contract.placeholder.filter_detail')) ?>"
+                    >
+                </label>
+            </div>
+            <p class="contract-muted contract-filter-empty" id="contract-detail-filter-empty"><?= portal_h(LOC('contract.empty.filter')) ?></p>
+                <div id="contract-detail-components">
                 <?php foreach ($components as $group): ?>
                     <?php if (!is_array($group)) { continue; } ?>
                     <?php $card = is_array($group['card'] ?? null) ? $group['card'] : []; ?>
                     <?php $groupWorkorders = portal_filter_workorders_with_reports(is_array($group['workorders'] ?? null) ? $group['workorders'] : []); ?>
                     <?php $groupTasks = is_array($group['tasks'] ?? null) ? $group['tasks'] : []; ?>
-                    <article class="contract-component">
+                    <article
+                        class="contract-component"
+                        data-component-no="<?= portal_h(strtolower((string) ($group['component_no'] ?? ''))) ?>"
+                        data-serial-no="<?= portal_h(strtolower(trim((string) ($card['serial_no'] ?? '')))) ?>"
+                    >
                         <h3><?= portal_h(portal_component_label($group)) ?></h3>
                         <div class="contract-muted">
                             <?= portal_h(LOC('contract.col.component')) ?>: <?= portal_h((string) ($group['component_no'] ?? '')) ?>
@@ -492,7 +516,7 @@ try {
                                     <tbody>
                                         <?php foreach ($groupWorkorders as $workorder): ?>
                                             <?php if (!is_array($workorder)) { continue; } ?>
-                                            <tr>
+                                            <tr data-workorder-no="<?= portal_h(strtolower(trim((string) ($workorder['no'] ?? '')))) ?>">
                                                 <td><?= portal_h((string) ($workorder['no'] ?? '')) ?></td>
                                                 <td><?= portal_h((string) ($workorder['task_code'] ?? '')) ?></td>
                                                 <td><?= portal_h((string) ($workorder['status'] ?? '')) ?></td>
@@ -505,6 +529,7 @@ try {
                         <?php endif; ?>
                     </article>
                 <?php endforeach; ?>
+                </div>
             <?php endif; ?>
         </section>
     <?php endif; ?>
@@ -874,6 +899,62 @@ try {
     }
 })();
 </script>
+<?php if ($view === 'contract' && is_array($contractDetail)): ?>
+<script>
+(function () {
+    var root = document.getElementById('contract-detail-filter');
+    var input = document.getElementById('contract-detail-filter-input');
+    var emptyMessage = document.getElementById('contract-detail-filter-empty');
+    if (!root || !input) {
+        return;
+    }
+
+    function normalize(value) {
+        return String(value || '').trim().toLowerCase();
+    }
+
+    function applyDetailFilter() {
+        var query = normalize(input.value);
+        var components = root.querySelectorAll('.contract-component');
+        var visibleComponents = 0;
+
+        components.forEach(function (component) {
+            var componentNo = normalize(component.getAttribute('data-component-no'));
+            var serialNo = normalize(component.getAttribute('data-serial-no'));
+            var matchComponentOrSerial = query !== ''
+                && ((componentNo !== '' && componentNo.indexOf(query) !== -1)
+                    || (serialNo !== '' && serialNo.indexOf(query) !== -1));
+            var rows = component.querySelectorAll('[data-workorder-no]');
+            var anyRowVisible = false;
+
+            rows.forEach(function (row) {
+                var workorderNo = normalize(row.getAttribute('data-workorder-no'));
+                var rowVisible = query === ''
+                    || matchComponentOrSerial
+                    || (workorderNo !== '' && workorderNo.indexOf(query) !== -1);
+                row.classList.toggle('is-filter-hidden', !rowVisible);
+                if (rowVisible) {
+                    anyRowVisible = true;
+                }
+            });
+
+            var componentVisible = query === '' || matchComponentOrSerial || anyRowVisible;
+            component.classList.toggle('is-filter-hidden', !componentVisible);
+            if (componentVisible) {
+                visibleComponents += 1;
+            }
+        });
+
+        if (emptyMessage) {
+            emptyMessage.classList.toggle('is-visible', query !== '' && visibleComponents === 0);
+        }
+    }
+
+    input.addEventListener('input', applyDetailFilter);
+    input.addEventListener('search', applyDetailFilter);
+})();
+</script>
+<?php endif; ?>
 <?php renderLanguageSwitcherScript(); ?>
 </body>
 </html>
