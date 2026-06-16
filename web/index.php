@@ -571,17 +571,6 @@ try {
         saveStoredSteps(steps);
     }
 
-    function rememberStepDone(stepId) {
-        var steps = loadStoredSteps();
-        var existing = steps.find(function (step) { return step.id === stepId; });
-        if (existing) {
-            existing.done = true;
-        } else {
-            steps.push({ id: stepId, done: true });
-        }
-        saveStoredSteps(steps);
-    }
-
     function restoreStepsFromStorage() {
         if (!stepsGrid) {
             return;
@@ -653,11 +642,36 @@ try {
             return;
         }
 
-        var slot = stepsGrid.querySelector('[data-step-id="' + stepId + '"]');
-        if (slot) {
-            slot.classList.add('is-done');
+        var slots = stepsGrid.querySelectorAll('.contract-load-step');
+        var steps = loadStoredSteps();
+        var reachedTarget = false;
+
+        slots.forEach(function (slot) {
+            var id = slot.getAttribute('data-step-id');
+            if (!reachedTarget) {
+                slot.classList.add('is-done');
+                var existing = steps.find(function (step) { return step.id === id; });
+                if (existing) {
+                    existing.done = true;
+                } else {
+                    steps.push({ id: id, done: true });
+                }
+            }
+            if (id === stepId) {
+                reachedTarget = true;
+            }
+        });
+
+        if (!reachedTarget) {
+            var fallback = steps.find(function (step) { return step.id === stepId; });
+            if (fallback) {
+                fallback.done = true;
+            } else {
+                steps.push({ id: stepId, done: true });
+            }
         }
-        rememberStepDone(stepId);
+
+        saveStoredSteps(steps);
     }
 
     function applyStepPlan(stepIds) {
