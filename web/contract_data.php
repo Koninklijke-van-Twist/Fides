@@ -11,6 +11,7 @@ require_once __DIR__ . '/odata.php';
  */
 const CONTRACT_FETCH_PROGRESS_CHUNK_SIZE = 5;
 const CONTRACT_FETCH_COMPONENT_CARD_CHUNK_SIZE = 20;
+const CONTRACT_LOAD_TIME_LIMIT_SECONDS = 10800;
 
 /**
  * Functies
@@ -36,6 +37,12 @@ function contract_chunk_progress_emit(?callable $emitChunk, string $step, string
     if ($emitChunk !== null) {
         $emitChunk($step, $status);
     }
+}
+
+function contract_extend_load_time_limit(): void
+{
+    @set_time_limit(CONTRACT_LOAD_TIME_LIMIT_SECONDS);
+    @ini_set('max_execution_time', (string) CONTRACT_LOAD_TIME_LIMIT_SECONDS);
 }
 
 function contract_escape_odata_string(string $value): string
@@ -295,6 +302,12 @@ function contract_normalize_workorder_row(array $row): array
     ];
 }
 
+function contract_workorder_has_report_links(array $workorder): bool
+{
+    return trim((string) ($workorder['pdf_url'] ?? '')) !== ''
+        || trim((string) ($workorder['excel_url'] ?? '')) !== '';
+}
+
 function contract_fetch_workorders_for_contract(string $company, string $contractNo, int $ttl = 3600, ?callable $emitChunk = null): array
 {
     $escaped = contract_escape_odata_string($contractNo);
@@ -316,7 +329,7 @@ function contract_fetch_workorders_for_contract(string $company, string $contrac
                 continue;
             }
             $normalized = contract_normalize_workorder_row($row);
-            if ($normalized['no'] !== '') {
+            if ($normalized['no'] !== '' && contract_workorder_has_report_links($normalized)) {
                 $workorders[] = $normalized;
             }
         }
@@ -339,7 +352,7 @@ function contract_fetch_workorders_for_contract(string $company, string $contrac
                     continue;
                 }
                 $normalized = contract_normalize_workorder_row($row);
-                if ($normalized['no'] !== '') {
+                if ($normalized['no'] !== '' && contract_workorder_has_report_links($normalized)) {
                     $workorders[] = $normalized;
                 }
             }
@@ -569,6 +582,8 @@ function contract_get_detail(
     bool $skipContractFetch = false,
     ?callable $emitStepPlan = null
 ): array {
+    contract_extend_load_time_limit();
+
     $contractNo = trim($contractNo);
     if ($contractNo === '') {
         return ['error_key' => 'contract.error.contract_required'];

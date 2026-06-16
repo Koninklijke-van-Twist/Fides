@@ -92,6 +92,19 @@ function portal_render_report_links(array $workorder): string
     return implode(' · ', $parts);
 }
 
+function portal_workorder_has_report_links(array $workorder): bool
+{
+    return trim((string) ($workorder['pdf_url'] ?? '')) !== ''
+        || trim((string) ($workorder['excel_url'] ?? '')) !== '';
+}
+
+function portal_filter_workorders_with_reports(array $workorders): array
+{
+    return array_values(array_filter($workorders, static function ($workorder): bool {
+        return is_array($workorder) && portal_workorder_has_report_links($workorder);
+    }));
+}
+
 /**
  * Page load
  */
@@ -400,7 +413,9 @@ try {
         <?php
         $contract = is_array($contractDetail['contract'] ?? null) ? $contractDetail['contract'] : [];
         $components = is_array($contractDetail['components'] ?? null) ? $contractDetail['components'] : [];
-        $workorders = is_array($contractDetail['workorders'] ?? null) ? $contractDetail['workorders'] : [];
+        $workorders = portal_filter_workorders_with_reports(
+            is_array($contractDetail['workorders'] ?? null) ? $contractDetail['workorders'] : []
+        );
         ?>
         <section class="contract-card">
             <h2><?= portal_h((string) ($contract['contract_no'] ?? $contractNo)) ?></h2>
@@ -437,7 +452,6 @@ try {
                 <?php endif; ?>
                 <div class="contract-muted"><?= portal_h(LOC('contract.workorders.count', (string) count($workorders))) ?></div>
             </div>
-            <p><a class="contract-btn contract-btn-secondary contract-nav" href="<?= portal_h(portal_url(['contract' => null, 'customer' => null, 'q' => null])) ?>"><?= portal_h(LOC('contract.btn.back')) ?></a></p>
         </section>
 
         <section class="contract-card">
@@ -448,7 +462,7 @@ try {
                 <?php foreach ($components as $group): ?>
                     <?php if (!is_array($group)) { continue; } ?>
                     <?php $card = is_array($group['card'] ?? null) ? $group['card'] : []; ?>
-                    <?php $groupWorkorders = is_array($group['workorders'] ?? null) ? $group['workorders'] : []; ?>
+                    <?php $groupWorkorders = portal_filter_workorders_with_reports(is_array($group['workorders'] ?? null) ? $group['workorders'] : []); ?>
                     <?php $groupTasks = is_array($group['tasks'] ?? null) ? $group['tasks'] : []; ?>
                     <article class="contract-component">
                         <h3><?= portal_h(portal_component_label($group)) ?></h3>

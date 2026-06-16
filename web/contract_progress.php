@@ -281,6 +281,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'GET') {
     exit;
 }
 
+contract_extend_load_time_limit();
 contract_progress_prepare_stream();
 
 $companies = contract_progress_load_companies();
