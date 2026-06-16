@@ -180,7 +180,7 @@ try {
     <title><?= portal_h(LOC('app.title')) ?></title>
     <link rel="stylesheet" href="brand.css">
     <link rel="manifest" href="site.webmanifest">
-    <link rel="icon" href="favicon.ico" sizes="any">
+    <link rel="icon" href="doc.svg" type="image/svg+xml">
     <?php renderLanguageSwitcherStyles(); ?>
     <style>
         .contract-page { max-width: 960px; margin: 0 auto; padding: 16px; }
@@ -249,6 +249,36 @@ try {
             border-radius: 50%;
             animation: contract-loader-spin 0.8s linear infinite;
         }
+        .contract-loader-steps {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            justify-content: center;
+            align-content: center;
+            width: 100%;
+            max-width: 220px;
+            min-height: 20px;
+            margin-inline: auto;
+        }
+        .contract-load-step {
+            width: 20px;
+            height: 20px;
+            line-height: 0;
+        }
+        .contract-load-step img {
+            width: 20px;
+            height: 20px;
+            display: block;
+            opacity: 0.2;
+            filter: grayscale(1) brightness(1.35);
+            transform-origin: center bottom;
+            transition: opacity 0.2s ease, filter 0.2s ease;
+        }
+        .contract-load-step.is-done img {
+            opacity: 1;
+            filter: none;
+            animation: contract-doc-pop 0.38s cubic-bezier(0.34, 1.45, 0.64, 1) forwards;
+        }
         .contract-loader-title {
             margin: 0;
             font-family: var(--kvt-font-display);
@@ -261,6 +291,12 @@ try {
         }
         @keyframes contract-loader-spin {
             to { transform: rotate(360deg); }
+        }
+        @keyframes contract-doc-pop {
+            0% { transform: translateY(0) scale(0.92); }
+            40% { transform: translateY(-5px) scale(1.18); }
+            70% { transform: translateY(1px) scale(0.97); }
+            100% { transform: translateY(0) scale(1); }
         }
     </style>
 </head>
@@ -460,6 +496,7 @@ try {
 <div id="contract-loader" class="contract-loader" aria-hidden="true" aria-live="polite" aria-busy="false">
     <div class="contract-loader-panel">
         <div class="contract-loader-spinner" aria-hidden="true"></div>
+        <div id="contract-loader-steps" class="contract-loader-steps" aria-hidden="true"></div>
         <p class="contract-loader-title"><?= portal_h(LOC('contract.loader.wait')) ?></p>
         <p class="contract-loader-text"><?= portal_h(LOC('contract.loader.loading')) ?></p>
     </div>
@@ -468,55 +505,338 @@ try {
 <script>
 (function () {
     var DELAY_MS = 500;
+    var STEPS_STORAGE_KEY = 'contract_loader_steps';
     var loader = document.getElementById('contract-loader');
+    var stepsGrid = document.getElementById('contract-loader-steps');
     if (!loader) {
         return;
     }
 
     var timer = null;
 
+    function loadStoredSteps() {
+        try {
+            var raw = sessionStorage.getItem(STEPS_STORAGE_KEY);
+            var parsed = raw ? JSON.parse(raw) : [];
+            return Array.isArray(parsed) ? parsed : [];
+        } catch (error) {
+            return [];
+        }
+    }
+
+    function saveStoredSteps(steps) {
+        sessionStorage.setItem(STEPS_STORAGE_KEY, JSON.stringify(steps));
+    }
+
+    function clearStoredSteps() {
+        sessionStorage.removeItem(STEPS_STORAGE_KEY);
+        if (stepsGrid) {
+            stepsGrid.innerHTML = '';
+        }
+    }
+
+    function rememberStepAdded(stepId) {
+        var steps = loadStoredSteps();
+        if (steps.some(function (step) { return step.id === stepId; })) {
+            return;
+        }
+
+        steps.push({ id: stepId, done: false });
+        saveStoredSteps(steps);
+    }
+
+    function rememberStepDone(stepId) {
+        var steps = loadStoredSteps();
+        var existing = steps.find(function (step) { return step.id === stepId; });
+        if (existing) {
+            existing.done = true;
+        } else {
+            steps.push({ id: stepId, done: true });
+        }
+        saveStoredSteps(steps);
+    }
+
+    function restoreStepsFromStorage() {
+        if (!stepsGrid) {
+            return;
+        }
+
+        loadStoredSteps().forEach(function (step) {
+            addStepSlot(step.id);
+            if (step.done) {
+                markStepDone(step.id);
+            }
+        });
+    }
+
+    function shouldResetStoredSteps(targetUrl) {
+        var hasQuery = !!(targetUrl.searchParams.get('q') || '');
+        var hasCustomer = !!(targetUrl.searchParams.get('customer') || '');
+        var hasContract = !!(targetUrl.searchParams.get('contract') || '');
+
+        if (!hasQuery && !hasCustomer && !hasContract) {
+            return true;
+        }
+
+        var currentUrl = new URL(window.location.href);
+        var targetCompany = targetUrl.searchParams.get('company') || '';
+        var currentCompany = currentUrl.searchParams.get('company') || '';
+        if (targetCompany !== '' && currentCompany !== '' && targetCompany !== currentCompany) {
+            return true;
+        }
+
+        return false;
+    }
+
     function showLoader() {
         loader.classList.add('is-visible');
         loader.setAttribute('aria-hidden', 'false');
         loader.setAttribute('aria-busy', 'true');
+        if (stepsGrid) {
+            stepsGrid.setAttribute('aria-hidden', 'false');
+        }
     }
 
-    function scheduleLoader() {
+    function hideLoader() {
+        loader.classList.remove('is-visible');
+        loader.setAttribute('aria-hidden', 'true');
+        loader.setAttribute('aria-busy', 'false');
+        if (stepsGrid) {
+            stepsGrid.setAttribute('aria-hidden', 'true');
+            stepsGrid.innerHTML = '';
+        }
+    }
+
+    function clearLoaderTimer() {
         if (timer !== null) {
+            window.clearTimeout(timer);
+            timer = null;
+        }
+    }
+
+    function addStepSlot(stepId) {
+        if (!stepsGrid || stepsGrid.querySelector('[data-step-id="' + stepId + '"]')) {
             return;
         }
-        timer = window.setTimeout(function () {
-            timer = null;
-            showLoader();
-        }, DELAY_MS);
+
+        var slot = document.createElement('div');
+        slot.className = 'contract-load-step';
+        slot.setAttribute('data-step-id', stepId);
+        slot.innerHTML = '<img src="doc.svg" width="20" height="20" alt="">';
+        stepsGrid.appendChild(slot);
+        rememberStepAdded(stepId);
     }
 
-    function isNavigationTrigger(element) {
-        if (!element) {
-            return false;
+    function markStepDone(stepId) {
+        if (!stepsGrid) {
+            return;
         }
-        if (element.matches('.contract-nav[href], .contract-nav[type="submit"], .lang-switcher-item a')) {
-            if (element.tagName === 'A' && element.target === '_blank') {
-                return false;
+
+        var slot = stepsGrid.querySelector('[data-step-id="' + stepId + '"]');
+        if (slot) {
+            slot.classList.add('is-done');
+        }
+        rememberStepDone(stepId);
+    }
+
+    function applyStepPlan(stepIds) {
+        if (!Array.isArray(stepIds)) {
+            return;
+        }
+
+        stepIds.forEach(function (stepId) {
+            addStepSlot(stepId);
+        });
+    }
+
+    function ensureChunkSlots(prefix, chunkCount) {
+        for (var index = 0; index < chunkCount; index += 1) {
+            addStepSlot(prefix + '_' + index);
+        }
+    }
+
+    function urlFromForm(form) {
+        var url = new URL(form.getAttribute('action') || window.location.pathname, window.location.href);
+        var formData = new FormData(form);
+
+        formData.forEach(function (value, key) {
+            if (String(value) !== '') {
+                url.searchParams.set(key, String(value));
+            } else {
+                url.searchParams.delete(key);
             }
-            return true;
+        });
+
+        var currentLang = new URL(window.location.href).searchParams.get('lang');
+        if (currentLang) {
+            url.searchParams.set('lang', currentLang);
         }
-        return false;
+
+        return url;
+    }
+
+    function navigateTo(url) {
+        window.location.href = url.pathname + url.search;
+    }
+
+    function handleProgressEvent(eventData) {
+        if (eventData.error) {
+            throw new Error('progress failed');
+        }
+
+        if (Array.isArray(eventData.stepPlan) && eventData.stepPlan.length > 0) {
+            applyStepPlan(eventData.stepPlan);
+        }
+
+        if (typeof eventData.workorderChunks === 'number' && eventData.workorderChunks > 0) {
+            ensureChunkSlots('workorders', eventData.workorderChunks);
+        }
+
+        if (typeof eventData.taskChunks === 'number' && eventData.taskChunks > 0) {
+            ensureChunkSlots('tasks', eventData.taskChunks);
+        }
+
+        if (typeof eventData.componentChunks === 'number' && eventData.componentChunks > 0) {
+            ensureChunkSlots('components', eventData.componentChunks);
+        }
+
+        if (eventData.status === 'start' && eventData.step) {
+            addStepSlot(eventData.step);
+        }
+
+        if (eventData.status === 'done' && eventData.step) {
+            markStepDone(eventData.step);
+        }
+    }
+
+    function runProgressAndNavigate(url, options) {
+        options = options || {};
+        var delayMs = typeof options.delayMs === 'number' ? options.delayMs : 0;
+        var loadTimer = null;
+
+        function startProgressLoad() {
+            clearLoaderTimer();
+            if (shouldResetStoredSteps(url)) {
+                clearStoredSteps();
+            }
+            showLoader();
+            restoreStepsFromStorage();
+
+            var progressUrl = new URL('contract_progress.php', window.location.href);
+            var navigationStarted = false;
+
+            url.searchParams.forEach(function (value, key) {
+                if (key === '_loaded') {
+                    return;
+                }
+                progressUrl.searchParams.set(key, value);
+            });
+
+            function finishNavigation() {
+                if (navigationStarted) {
+                    return;
+                }
+                navigationStarted = true;
+                sessionStorage.setItem('contract_skip_loader', '1');
+                url.searchParams.set('_loaded', '1');
+                navigateTo(url);
+            }
+
+            fetch(progressUrl.toString()).then(function (response) {
+                if (!response.ok || !response.body) {
+                    throw new Error('progress failed');
+                }
+
+                var reader = response.body.getReader();
+                var decoder = new TextDecoder();
+                var buffer = '';
+                var streamComplete = false;
+
+                function readChunk() {
+                    return reader.read().then(function (result) {
+                        if (result.done) {
+                            if (!streamComplete) {
+                                finishNavigation();
+                            }
+                            return;
+                        }
+
+                        buffer += decoder.decode(result.value, { stream: true });
+                        var parts = buffer.split('\n');
+                        buffer = parts.pop() || '';
+
+                        parts.forEach(function (line) {
+                            var trimmed = line.trim();
+                            if (trimmed === '') {
+                                return;
+                            }
+
+                            var eventData = JSON.parse(trimmed);
+                            handleProgressEvent(eventData);
+
+                            if (eventData.complete) {
+                                streamComplete = true;
+                                finishNavigation();
+                            }
+                        });
+
+                        return readChunk();
+                    });
+                }
+
+                return readChunk();
+            }).catch(function () {
+                finishNavigation();
+            });
+        }
+
+        if (delayMs > 0) {
+            loadTimer = window.setTimeout(startProgressLoad, delayMs);
+            return;
+        }
+
+        startProgressLoad();
+    }
+
+    function shouldInterceptNavigation(event) {
+        return !(event.defaultPrevented
+            || event.button !== 0
+            || event.metaKey
+            || event.ctrlKey
+            || event.shiftKey
+            || event.altKey);
     }
 
     document.addEventListener('click', function (event) {
-        var trigger = event.target.closest('.contract-nav[href], .contract-nav[type="submit"], .lang-switcher-item a');
-        if (!isNavigationTrigger(trigger)) {
+        var trigger = event.target.closest('.contract-nav[href], .lang-switcher-item a');
+        if (!trigger || !shouldInterceptNavigation(event)) {
             return;
         }
-        scheduleLoader();
+        if (trigger.tagName === 'A' && trigger.target === '_blank') {
+            return;
+        }
+
+        event.preventDefault();
+        runProgressAndNavigate(new URL(trigger.href, window.location.href), { delayMs: DELAY_MS });
     }, true);
 
     document.querySelectorAll('form.contract-nav').forEach(function (form) {
-        form.addEventListener('submit', function () {
-            scheduleLoader();
+        form.addEventListener('submit', function (event) {
+            event.preventDefault();
+            runProgressAndNavigate(urlFromForm(form), { delayMs: DELAY_MS });
         });
     });
+
+    if (sessionStorage.getItem('contract_skip_loader')) {
+        sessionStorage.removeItem('contract_skip_loader');
+        hideLoader();
+
+        var cleanUrl = new URL(window.location.href);
+        if (cleanUrl.searchParams.has('_loaded')) {
+            cleanUrl.searchParams.delete('_loaded');
+            window.history.replaceState({}, '', cleanUrl.pathname + cleanUrl.search);
+        }
+    }
 })();
 </script>
 <?php renderLanguageSwitcherScript(); ?>
