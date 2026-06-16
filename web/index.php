@@ -32,7 +32,7 @@ function portal_url(array $params = []): string
         }
         $query[$key] = $value;
     }
-    unset($query['lang']);
+    unset($query['lang'], $query['_loaded']);
 
     $path = strtok((string) ($_SERVER['REQUEST_URI'] ?? 'index.php'), '?') ?: 'index.php';
     $lang = getCurrentLanguage();
@@ -128,8 +128,19 @@ $contractDetail = null;
 
 auth_set_current_company_context($company);
 
+$loadedFromProgress = isset($_GET['_loaded']);
+$prefetchKey = contract_portal_prefetch_key($company, $contractNo, $customerNo, $searchQuery);
+$prefetchedState = $loadedFromProgress ? contract_portal_take_prefetch($prefetchKey) : null;
+
 try {
-    if ($contractNo !== '') {
+    if ($prefetchedState !== null) {
+        $view = (string) ($prefetchedState['view'] ?? 'search');
+        $errorKey = (string) ($prefetchedState['errorKey'] ?? '');
+        $searchResult = $prefetchedState['searchResult'] ?? null;
+        $customer = $prefetchedState['customer'] ?? null;
+        $contracts = is_array($prefetchedState['contracts'] ?? null) ? $prefetchedState['contracts'] : [];
+        $contractDetail = $prefetchedState['contractDetail'] ?? null;
+    } elseif ($contractNo !== '') {
         $contractDetail = contract_get_detail($company, $contractNo);
         if (isset($contractDetail['error_key'])) {
             $errorKey = (string) $contractDetail['error_key'];
@@ -139,6 +150,7 @@ try {
             $view = 'contract';
         }
     } elseif ($customerNo !== '') {
+
         $customer = contract_fetch_customer_by_no($company, $customerNo);
         if ($customer === null) {
             $errorKey = 'contract.error.not_found';

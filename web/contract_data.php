@@ -7,8 +7,36 @@ require_once __DIR__ . '/auth_helper.php';
 require_once __DIR__ . '/odata.php';
 
 /**
+ * Constants
+ */
+const CONTRACT_FETCH_PROGRESS_CHUNK_SIZE = 5;
+const CONTRACT_FETCH_COMPONENT_CARD_CHUNK_SIZE = 20;
+
+/**
  * Functies
  */
+
+function contract_build_progress_chunk_step_ids(string $prefix, int $itemCount, int $chunkSize = CONTRACT_FETCH_PROGRESS_CHUNK_SIZE): array
+{
+    if ($itemCount <= 0) {
+        return [];
+    }
+
+    $chunkCount = (int) ceil($itemCount / $chunkSize);
+    $stepIds = [];
+    for ($index = 0; $index < $chunkCount; $index++) {
+        $stepIds[] = $prefix . '_' . $index;
+    }
+
+    return $stepIds;
+}
+
+function contract_chunk_progress_emit(?callable $emitChunk, string $step, string $status): void
+{
+    if ($emitChunk !== null) {
+        $emitChunk($step, $status);
+    }
+}
 
 function contract_escape_odata_string(string $value): string
 {
@@ -267,27 +295,62 @@ function contract_normalize_workorder_row(array $row): array
     ];
 }
 
-function contract_fetch_workorders_for_contract(string $company, string $contractNo, int $ttl = 3600): array
+function contract_fetch_workorders_for_contract(string $company, string $contractNo, int $ttl = 3600, ?callable $emitChunk = null): array
 {
     $escaped = contract_escape_odata_string($contractNo);
     if ($escaped === '') {
         return [];
     }
 
-    $rows = contract_try_fetch_rows($company, 'LVS_MainWorkOrderCard', [
+    $query = [
         '$select' => 'No,Contract_No,Component_No,Component_Description,Status,Task_Code,KVT_Report_Status,KVT_URL_Workorder_Report_PDF,KVT_URL_Workorder_Report_Excel',
         '$filter' => "Contract_No eq '" . $escaped . "'",
-        '$top' => '500',
-    ], $ttl);
+        '$orderby' => 'No desc',
+    ];
 
     $workorders = [];
-    foreach ($rows as $row) {
-        if (!is_array($row)) {
-            continue;
+    if ($emitChunk === null) {
+        $rows = contract_try_fetch_rows($company, 'LVS_MainWorkOrderCard', $query + ['$top' => '500'], $ttl);
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $normalized = contract_normalize_workorder_row($row);
+            if ($normalized['no'] !== '') {
+                $workorders[] = $normalized;
+            }
         }
-        $normalized = contract_normalize_workorder_row($row);
-        if ($normalized['no'] !== '') {
-            $workorders[] = $normalized;
+    } else {
+        $chunkSize = CONTRACT_FETCH_PROGRESS_CHUNK_SIZE;
+        $skip = 0;
+        $chunkIndex = 0;
+        $maxRows = 500;
+
+        while (count($workorders) < $maxRows) {
+            $stepId = 'workorders_' . $chunkIndex;
+            contract_chunk_progress_emit($emitChunk, $stepId, 'start');
+            $rows = contract_try_fetch_rows($company, 'LVS_MainWorkOrderCard', $query + [
+                '$top' => (string) $chunkSize,
+                '$skip' => (string) $skip,
+            ], $ttl);
+
+            foreach ($rows as $row) {
+                if (!is_array($row)) {
+                    continue;
+                }
+                $normalized = contract_normalize_workorder_row($row);
+                if ($normalized['no'] !== '') {
+                    $workorders[] = $normalized;
+                }
+            }
+            contract_chunk_progress_emit($emitChunk, $stepId, 'done');
+
+            if ($rows === [] || count($rows) < $chunkSize || count($workorders) >= $maxRows) {
+                break;
+            }
+
+            $skip += $chunkSize;
+            $chunkIndex++;
         }
     }
 
@@ -298,20 +361,69 @@ function contract_fetch_workorders_for_contract(string $company, string $contrac
     return $workorders;
 }
 
-function contract_fetch_component_tasks_for_contract(string $company, string $contractNo, int $ttl = 3600): array
+function contract_fetch_component_tasks_for_contract(string $company, string $contractNo, int $ttl = 3600, ?callable $emitChunk = null): array
 {
     $escaped = contract_escape_odata_string($contractNo);
     if ($escaped === '') {
         return [];
     }
 
-    $rows = contract_try_fetch_rows($company, 'AppComponentCardTasks', [
+    $query = [
         '$select' => 'Component_No,Contract_No,Task_Code,Description,Main_Entity,Contract_Status',
         '$filter' => "Contract_No eq '" . $escaped . "'",
-        '$top' => '500',
-    ], $ttl);
+    ];
 
     $tasks = [];
+    if ($emitChunk === null) {
+        $rows = contract_try_fetch_rows($company, 'AppComponentCardTasks', $query + ['$top' => '500'], $ttl);
+    } else {
+        $chunkSize = CONTRACT_FETCH_PROGRESS_CHUNK_SIZE;
+        $skip = 0;
+        $chunkIndex = 0;
+        $maxRows = 500;
+        $rows = [];
+
+        while (count($tasks) < $maxRows) {
+            $stepId = 'tasks_' . $chunkIndex;
+            contract_chunk_progress_emit($emitChunk, $stepId, 'start');
+            $rows = contract_try_fetch_rows($company, 'AppComponentCardTasks', $query + [
+                '$top' => (string) $chunkSize,
+                '$skip' => (string) $skip,
+            ], $ttl);
+
+            foreach ($rows as $row) {
+                if (!is_array($row)) {
+                    continue;
+                }
+                $componentNo = trim((string) ($row['Component_No'] ?? ''));
+                if ($componentNo === '') {
+                    continue;
+                }
+                $tasks[] = [
+                    'component_no' => $componentNo,
+                    'task_code' => trim((string) ($row['Task_Code'] ?? '')),
+                    'description' => trim((string) ($row['Description'] ?? '')),
+                    'main_entity' => trim((string) ($row['Main_Entity'] ?? '')),
+                    'contract_status' => trim((string) ($row['Contract_Status'] ?? '')),
+                ];
+            }
+            contract_chunk_progress_emit($emitChunk, $stepId, 'done');
+
+            if ($rows === [] || count($rows) < $chunkSize || count($tasks) >= $maxRows) {
+                break;
+            }
+
+            $skip += $chunkSize;
+            $chunkIndex++;
+        }
+
+        usort($tasks, static function (array $left, array $right): int {
+            return strcasecmp((string) ($left['component_no'] ?? ''), (string) ($right['component_no'] ?? ''));
+        });
+
+        return $tasks;
+    }
+
     foreach ($rows as $row) {
         if (!is_array($row)) {
             continue;
@@ -329,11 +441,20 @@ function contract_fetch_component_tasks_for_contract(string $company, string $co
         ];
     }
 
+    usort($tasks, static function (array $left, array $right): int {
+        return strcasecmp((string) ($left['component_no'] ?? ''), (string) ($right['component_no'] ?? ''));
+    });
+
     return $tasks;
 }
 
-function contract_fetch_component_cards(string $company, array $componentNos, int $ttl = 3600): array
-{
+function contract_fetch_component_cards(
+    string $company,
+    array $componentNos,
+    int $ttl = 3600,
+    ?callable $emitChunk = null,
+    ?callable $emitStepPlan = null
+): array {
     $componentNos = array_values(array_unique(array_filter(array_map(static function ($value): string {
         return trim((string) $value);
     }, $componentNos))));
@@ -342,10 +463,18 @@ function contract_fetch_component_cards(string $company, array $componentNos, in
         return [];
     }
 
-    $chunks = array_chunk($componentNos, 20);
+    $chunkSize = $emitChunk !== null ? CONTRACT_FETCH_PROGRESS_CHUNK_SIZE : CONTRACT_FETCH_COMPONENT_CARD_CHUNK_SIZE;
+    $chunks = array_chunk($componentNos, $chunkSize);
     $byNo = [];
 
-    foreach ($chunks as $chunk) {
+    if ($emitStepPlan !== null) {
+        $emitStepPlan(contract_build_progress_chunk_step_ids('components', count($componentNos), $chunkSize));
+    }
+
+    foreach ($chunks as $chunkIndex => $chunk) {
+        $stepId = 'components_' . $chunkIndex;
+        contract_chunk_progress_emit($emitChunk, $stepId, 'start');
+
         $filters = [];
         foreach ($chunk as $componentNo) {
             $filters[] = "No eq '" . contract_escape_odata_string($componentNo) . "'";
@@ -374,6 +503,8 @@ function contract_fetch_component_cards(string $company, array $componentNos, in
                 'status' => trim((string) ($row['Status'] ?? '')),
             ];
         }
+
+        contract_chunk_progress_emit($emitChunk, $stepId, 'done');
     }
 
     return $byNo;
@@ -430,16 +561,32 @@ function contract_build_component_groups(array $workorders, array $tasks, array 
     return array_values($groups);
 }
 
-function contract_get_detail(string $company, string $contractNo, int $ttl = 3600): array
-{
+function contract_get_detail(
+    string $company,
+    string $contractNo,
+    int $ttl = 3600,
+    ?callable $emitProgress = null,
+    bool $skipContractFetch = false,
+    ?callable $emitStepPlan = null
+): array {
     $contractNo = trim($contractNo);
     if ($contractNo === '') {
         return ['error_key' => 'contract.error.contract_required'];
     }
 
-    $contract = contract_fetch_contract_by_no($company, $contractNo, $ttl);
-    $workorders = contract_fetch_workorders_for_contract($company, $contractNo, $ttl);
-    $tasks = contract_fetch_component_tasks_for_contract($company, $contractNo, $ttl);
+    $emit = static function (string $step, string $status) use ($emitProgress): void {
+        if ($emitProgress !== null) {
+            $emitProgress($step, $status);
+        }
+    };
+    $emitChunk = $emitProgress;
+
+    $emit('contract', 'start');
+    $contract = $skipContractFetch ? null : contract_fetch_contract_by_no($company, $contractNo, $ttl);
+    $emit('contract', 'done');
+
+    $workorders = contract_fetch_workorders_for_contract($company, $contractNo, $ttl, $emitChunk);
+    $tasks = contract_fetch_component_tasks_for_contract($company, $contractNo, $ttl, $emitChunk);
 
     if ($contract === null && $workorders === [] && $tasks === []) {
         return ['error_key' => 'contract.error.contract_not_found'];
@@ -466,13 +613,138 @@ function contract_get_detail(string $company, string $contractNo, int $ttl = 360
         $componentNos[] = (string) ($task['component_no'] ?? '');
     }
 
-    $componentCards = contract_fetch_component_cards($company, $componentNos, $ttl);
+    $componentCards = contract_fetch_component_cards($company, $componentNos, $ttl, $emitChunk, $emitStepPlan);
 
     return [
         'contract' => $contract,
         'workorders' => $workorders,
         'components' => contract_build_component_groups($workorders, $tasks, $componentCards),
     ];
+}
+
+function contract_portal_prefetch_key(string $company, string $contractNo, string $customerNo, string $searchQuery): string
+{
+    return hash('sha256', json_encode([
+        'company' => trim($company),
+        'contract' => trim($contractNo),
+        'customer' => trim($customerNo),
+        'q' => trim($searchQuery),
+    ], JSON_UNESCAPED_UNICODE));
+}
+
+function contract_portal_store_prefetch(string $key, array $data): void
+{
+    if (session_status() !== PHP_SESSION_ACTIVE) {
+        @session_start();
+    }
+
+    $_SESSION['contract_portal_prefetch'] = [
+        'key' => $key,
+        'data' => $data,
+    ];
+
+    if (session_status() === PHP_SESSION_ACTIVE) {
+        session_write_close();
+    }
+}
+
+function contract_portal_take_prefetch(string $key): ?array
+{
+    if (session_status() !== PHP_SESSION_ACTIVE) {
+        @session_start();
+    }
+
+    $stored = $_SESSION['contract_portal_prefetch'] ?? null;
+    unset($_SESSION['contract_portal_prefetch']);
+
+    if (!is_array($stored) || (string) ($stored['key'] ?? '') !== $key) {
+        return null;
+    }
+
+    $data = $stored['data'] ?? null;
+    return is_array($data) ? $data : null;
+}
+
+function contract_load_page_state(
+    string $company,
+    string $contractNo,
+    string $customerNo,
+    string $searchQuery,
+    int $ttl = 3600,
+    ?array $contractDetailResult = null
+): array {
+    $state = [
+        'view' => 'search',
+        'errorKey' => '',
+        'searchResult' => null,
+        'customer' => null,
+        'contracts' => [],
+        'contractDetail' => null,
+    ];
+
+    if ($contractNo !== '') {
+        $contractDetail = $contractDetailResult ?? contract_get_detail($company, $contractNo, $ttl);
+        if (isset($contractDetail['error_key'])) {
+            $state['errorKey'] = (string) $contractDetail['error_key'];
+        } else {
+            $state['view'] = 'contract';
+            $state['contractDetail'] = $contractDetail;
+        }
+
+        return $state;
+    }
+
+    if ($customerNo !== '') {
+        $customer = contract_fetch_customer_by_no($company, $customerNo, $ttl);
+        if ($customer === null) {
+            $state['errorKey'] = 'contract.error.not_found';
+        } else {
+            $state['view'] = 'contracts';
+            $state['customer'] = $customer;
+            $state['contracts'] = contract_fetch_contracts_for_customer($company, $customerNo, $ttl);
+        }
+
+        return $state;
+    }
+
+    if ($searchQuery === '') {
+        return $state;
+    }
+
+    $searchResult = contract_search($company, $searchQuery, $ttl);
+    $state['searchResult'] = $searchResult;
+    $kind = (string) ($searchResult['kind'] ?? 'empty');
+
+    if ($kind === 'contract') {
+        $resolvedContractNo = (string) ($searchResult['contract_no'] ?? '');
+        $contractDetail = contract_get_detail($company, $resolvedContractNo, $ttl);
+        if (isset($contractDetail['error_key'])) {
+            $state['errorKey'] = (string) $contractDetail['error_key'];
+        } else {
+            $state['view'] = 'contract';
+            $state['contractDetail'] = $contractDetail;
+        }
+
+        return $state;
+    }
+
+    if ($kind === 'customer') {
+        $state['view'] = 'contracts';
+        $state['customer'] = is_array($searchResult['customer'] ?? null) ? $searchResult['customer'] : null;
+        $state['contracts'] = is_array($searchResult['contracts'] ?? null) ? $searchResult['contracts'] : [];
+
+        return $state;
+    }
+
+    if ($kind === 'customers') {
+        $state['view'] = 'customers';
+
+        return $state;
+    }
+
+    $state['errorKey'] = (string) ($searchResult['message_key'] ?? 'contract.error.not_found');
+
+    return $state;
 }
 
 function contract_default_companies(): array

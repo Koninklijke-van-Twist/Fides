@@ -10,13 +10,6 @@ require_once __DIR__ . '/auth_helper.php';
 require_once __DIR__ . '/contract_data.php';
 
 /**
- * Constants
- */
-const CONTRACT_PROGRESS_WORKORDER_PAGE_SIZE = 50;
-const CONTRACT_PROGRESS_TASK_PAGE_SIZE = 50;
-const CONTRACT_PROGRESS_COMPONENT_CHUNK_SIZE = 20;
-
-/**
  * Functies
  */
 
@@ -68,32 +61,6 @@ function contract_progress_count_rows(string $company, string $entitySet, string
     return null;
 }
 
-function contract_progress_chunk_count(?int $rowCount, int $pageSize): ?int
-{
-    if ($rowCount === null) {
-        return null;
-    }
-    if ($rowCount <= 0) {
-        return 0;
-    }
-
-    return (int) ceil($rowCount / $pageSize);
-}
-
-function contract_progress_build_chunk_step_ids(string $prefix, ?int $chunkCount): array
-{
-    if ($chunkCount === null || $chunkCount <= 0) {
-        return [];
-    }
-
-    $stepIds = [];
-    for ($index = 0; $index < $chunkCount; $index++) {
-        $stepIds[] = $prefix . '_' . $index;
-    }
-
-    return $stepIds;
-}
-
 function contract_progress_emit_step_plan(array $stepIds): void
 {
     if ($stepIds === []) {
@@ -101,6 +68,11 @@ function contract_progress_emit_step_plan(array $stepIds): void
     }
 
     contract_progress_emit(['stepPlan' => $stepIds]);
+}
+
+function contract_progress_emit_step(string $step, string $status): void
+{
+    contract_progress_emit(['step' => $step, 'status' => $status]);
 }
 
 function contract_progress_search_customers_by_name(string $company, string $query, int $ttl = 3600): array
@@ -135,7 +107,7 @@ function contract_progress_search_customers_by_name(string $company, string $que
             $seen[$normalized['no']] = true;
             $customers[] = $normalized;
         }
-        contract_progress_emit(['step' => $stepId, 'status' => 'done']);
+        contract_progress_emit_step($stepId, 'done');
     }
 
     usort($customers, static function (array $left, array $right): int {
@@ -161,7 +133,7 @@ function contract_progress_search(string $company, string $query, int $ttl = 360
     ]);
 
     $contract = contract_fetch_contract_by_no($company, $query, $ttl);
-    contract_progress_emit(['step' => 'search_contract', 'status' => 'done']);
+    contract_progress_emit_step('search_contract', 'done');
     if ($contract !== null) {
         return [
             'kind' => 'contract',
@@ -172,7 +144,7 @@ function contract_progress_search(string $company, string $query, int $ttl = 360
     }
 
     $existsOnWorkorders = contract_contract_exists_on_workorders($company, $query, $ttl);
-    contract_progress_emit(['step' => 'search_workorders', 'status' => 'done']);
+    contract_progress_emit_step('search_workorders', 'done');
     if ($existsOnWorkorders) {
         return [
             'kind' => 'contract',
@@ -192,13 +164,12 @@ function contract_progress_search(string $company, string $query, int $ttl = 360
     }
 
     $customer = contract_fetch_customer_by_no($company, $query, $ttl);
-    contract_progress_emit(['step' => 'search_customer', 'status' => 'done']);
+    contract_progress_emit_step('search_customer', 'done');
     if ($customer !== null) {
         contract_progress_emit_step_plan(['contracts']);
-
-        contract_progress_emit(['step' => 'contracts', 'status' => 'start']);
+        contract_progress_emit_step('contracts', 'start');
         $contracts = contract_fetch_contracts_for_customer($company, $customer['no'], $ttl);
-        contract_progress_emit(['step' => 'contracts', 'status' => 'done']);
+        contract_progress_emit_step('contracts', 'done');
 
         return [
             'kind' => 'customer',
@@ -215,9 +186,9 @@ function contract_progress_search(string $company, string $query, int $ttl = 360
     if (count($customers) === 1) {
         $single = $customers[0];
         contract_progress_emit_step_plan(['contracts']);
-        contract_progress_emit(['step' => 'contracts', 'status' => 'start']);
+        contract_progress_emit_step('contracts', 'start');
         $contracts = contract_fetch_contracts_for_customer($company, $single['no'], $ttl);
-        contract_progress_emit(['step' => 'contracts', 'status' => 'done']);
+        contract_progress_emit_step('contracts', 'done');
 
         return [
             'kind' => 'customer',
@@ -232,188 +203,73 @@ function contract_progress_search(string $company, string $query, int $ttl = 360
     ];
 }
 
-function contract_progress_fetch_workorders(string $company, string $contractNo, int $ttl = 3600, ?int $knownChunkCount = null): array
-{
-    $escaped = contract_escape_odata_string($contractNo);
-    if ($escaped === '') {
-        return [];
-    }
-
-    $pageSize = CONTRACT_PROGRESS_WORKORDER_PAGE_SIZE;
-    $skip = 0;
-    $chunkIndex = 0;
-    $workorders = [];
-
-    while (true) {
-        if ($knownChunkCount === null) {
-            contract_progress_emit(['step' => 'workorders_' . $chunkIndex, 'status' => 'start']);
-        }
-
-        $rows = contract_try_fetch_rows($company, 'LVS_MainWorkOrderCard', [
-            '$select' => 'No,Contract_No,Component_No,Component_Description,Status,Task_Code,KVT_Report_Status,KVT_URL_Workorder_Report_PDF,KVT_URL_Workorder_Report_Excel',
-            '$filter' => "Contract_No eq '" . $escaped . "'",
-            '$orderby' => 'No desc',
-            '$top' => (string) $pageSize,
-            '$skip' => (string) $skip,
-        ], $ttl);
-
-        foreach ($rows as $row) {
-            if (!is_array($row)) {
-                continue;
-            }
-            $normalized = contract_normalize_workorder_row($row);
-            if ($normalized['no'] !== '') {
-                $workorders[] = $normalized;
-            }
-        }
-        contract_progress_emit(['step' => 'workorders_' . $chunkIndex, 'status' => 'done']);
-
-        if (count($rows) < $pageSize) {
-            break;
-        }
-
-        $skip += $pageSize;
-        $chunkIndex++;
-    }
-
-    usort($workorders, static function (array $left, array $right): int {
-        return strcasecmp((string) ($right['no'] ?? ''), (string) ($left['no'] ?? ''));
-    });
-
-    return $workorders;
-}
-
-function contract_progress_fetch_tasks(string $company, string $contractNo, int $ttl = 3600, ?int $knownChunkCount = null): array
-{
-    $escaped = contract_escape_odata_string($contractNo);
-    if ($escaped === '') {
-        return [];
-    }
-
-    $pageSize = CONTRACT_PROGRESS_TASK_PAGE_SIZE;
-    $skip = 0;
-    $chunkIndex = 0;
-    $tasks = [];
-
-    while (true) {
-        if ($knownChunkCount === null) {
-            contract_progress_emit(['step' => 'tasks_' . $chunkIndex, 'status' => 'start']);
-        }
-
-        $rows = contract_try_fetch_rows($company, 'AppComponentCardTasks', [
-            '$select' => 'Component_No,Contract_No,Task_Code,Description,Main_Entity,Contract_Status',
-            '$filter' => "Contract_No eq '" . $escaped . "'",
-            '$top' => (string) $pageSize,
-            '$skip' => (string) $skip,
-        ], $ttl);
-
-        foreach ($rows as $row) {
-            if (!is_array($row)) {
-                continue;
-            }
-            $componentNo = trim((string) ($row['Component_No'] ?? ''));
-            if ($componentNo === '') {
-                continue;
-            }
-            $tasks[] = [
-                'component_no' => $componentNo,
-                'task_code' => trim((string) ($row['Task_Code'] ?? '')),
-                'description' => trim((string) ($row['Description'] ?? '')),
-                'main_entity' => trim((string) ($row['Main_Entity'] ?? '')),
-                'contract_status' => trim((string) ($row['Contract_Status'] ?? '')),
-            ];
-        }
-        contract_progress_emit(['step' => 'tasks_' . $chunkIndex, 'status' => 'done']);
-
-        if (count($rows) < $pageSize) {
-            break;
-        }
-
-        $skip += $pageSize;
-        $chunkIndex++;
-    }
-
-    usort($tasks, static function (array $left, array $right): int {
-        return strcasecmp((string) ($left['component_no'] ?? ''), (string) ($right['component_no'] ?? ''));
-    });
-
-    return $tasks;
-}
-
-function contract_progress_fetch_component_chunks(string $company, array $componentNos, int $ttl = 3600): void
-{
-    $componentNos = array_values(array_unique(array_filter(array_map(static function ($value): string {
-        return trim((string) $value);
-    }, $componentNos))));
-
-    if ($componentNos === []) {
-        return;
-    }
-
-    $chunks = array_chunk($componentNos, CONTRACT_PROGRESS_COMPONENT_CHUNK_SIZE);
-    if ($chunks !== []) {
-        contract_progress_emit_step_plan(contract_progress_build_chunk_step_ids('components', count($chunks)));
-    }
-
-    foreach ($chunks as $chunkIndex => $chunk) {
-        contract_fetch_component_cards($company, $chunk, $ttl);
-        contract_progress_emit(['step' => 'components_' . $chunkIndex, 'status' => 'done']);
-    }
-}
-
-function contract_progress_load_detail(string $company, string $contractNo, int $ttl = 3600, bool $skipContractFetch = false): void
+function contract_progress_load_detail(string $company, string $contractNo, int $ttl = 3600, bool $skipContractFetch = false): array
 {
     $escaped = contract_escape_odata_string($contractNo);
     $contractFilter = $escaped !== '' ? "Contract_No eq '" . $escaped . "'" : '';
 
-    $workorderChunkCount = $contractFilter !== ''
-        ? contract_progress_chunk_count(
-            contract_progress_count_rows($company, 'LVS_MainWorkOrderCard', $contractFilter, $ttl),
-            CONTRACT_PROGRESS_WORKORDER_PAGE_SIZE
-        )
-        : 0;
-    $taskChunkCount = $contractFilter !== ''
-        ? contract_progress_chunk_count(
-            contract_progress_count_rows($company, 'AppComponentCardTasks', $contractFilter, $ttl),
-            CONTRACT_PROGRESS_TASK_PAGE_SIZE
-        )
-        : 0;
-
-    $stepPlan = [];
+    $countStepPlan = [];
     if (!$skipContractFetch) {
-        $stepPlan[] = 'contract';
+        $countStepPlan[] = 'contract';
     }
-    $stepPlan = array_merge(
-        $stepPlan,
-        contract_progress_build_chunk_step_ids('workorders', $workorderChunkCount),
-        contract_progress_build_chunk_step_ids('tasks', $taskChunkCount)
+    if ($contractFilter !== '') {
+        $countStepPlan[] = 'count_workorders';
+        $countStepPlan[] = 'count_tasks';
+    }
+    contract_progress_emit_step_plan($countStepPlan);
+
+    $workorderRowCount = null;
+    $taskRowCount = null;
+    if ($contractFilter !== '') {
+        contract_progress_emit_step('count_workorders', 'start');
+        $workorderRowCount = contract_progress_count_rows($company, 'LVS_MainWorkOrderCard', $contractFilter, $ttl);
+        contract_progress_emit_step('count_workorders', 'done');
+
+        contract_progress_emit_step('count_tasks', 'start');
+        $taskRowCount = contract_progress_count_rows($company, 'AppComponentCardTasks', $contractFilter, $ttl);
+        contract_progress_emit_step('count_tasks', 'done');
+    }
+
+    $fetchStepPlan = [];
+    if (!$skipContractFetch) {
+        $fetchStepPlan[] = 'contract';
+    }
+    if ($workorderRowCount !== null && $workorderRowCount > 0) {
+        $fetchStepPlan = array_merge(
+            $fetchStepPlan,
+            contract_build_progress_chunk_step_ids('workorders', $workorderRowCount)
+        );
+    }
+    if ($taskRowCount !== null && $taskRowCount > 0) {
+        $fetchStepPlan = array_merge(
+            $fetchStepPlan,
+            contract_build_progress_chunk_step_ids('tasks', $taskRowCount)
+        );
+    }
+    contract_progress_emit_step_plan($fetchStepPlan);
+
+    return contract_get_detail(
+        $company,
+        $contractNo,
+        $ttl,
+        static function (string $step, string $status): void {
+            contract_progress_emit_step($step, $status);
+        },
+        $skipContractFetch,
+        static function (array $stepIds): void {
+            contract_progress_emit_step_plan($stepIds);
+        }
     );
-    contract_progress_emit_step_plan($stepPlan);
+}
 
-    if (!$skipContractFetch) {
-        contract_progress_emit(['step' => 'contract', 'status' => 'start']);
-        contract_fetch_contract_by_no($company, $contractNo, $ttl);
-        contract_progress_emit(['step' => 'contract', 'status' => 'done']);
-    }
+function contract_progress_load_companies(int $ttl = 3600): array
+{
+    contract_progress_emit_step_plan(['companies']);
+    contract_progress_emit_step('companies', 'start');
+    $companies = contract_companies_for_page($ttl);
+    contract_progress_emit_step('companies', 'done');
 
-    $workorders = contract_progress_fetch_workorders($company, $contractNo, $ttl, $workorderChunkCount);
-    $tasks = contract_progress_fetch_tasks($company, $contractNo, $ttl, $taskChunkCount);
-
-    $componentNos = [];
-    foreach ($workorders as $workorder) {
-        $no = trim((string) ($workorder['component_no'] ?? ''));
-        if ($no !== '') {
-            $componentNos[$no] = $no;
-        }
-    }
-    foreach ($tasks as $task) {
-        $no = trim((string) ($task['component_no'] ?? ''));
-        if ($no !== '') {
-            $componentNos[$no] = $no;
-        }
-    }
-
-    contract_progress_fetch_component_chunks($company, array_values($componentNos), $ttl);
+    return $companies;
 }
 
 /**
@@ -427,7 +283,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'GET') {
 
 contract_progress_prepare_stream();
 
-$companies = contract_companies_for_page();
+$companies = contract_progress_load_companies();
 $prefEmail = strtolower(trim((string) ($_SESSION['user']['email'] ?? '')));
 $savedCompany = '';
 if ($prefEmail !== '') {
@@ -450,26 +306,26 @@ $contractNo = trim((string) ($_GET['contract'] ?? ''));
 try {
     auth_set_current_company_context($company);
 
+    $contractDetailResult = null;
+
     if ($contractNo !== '') {
-        contract_progress_load_detail($company, $contractNo);
+        $contractDetailResult = contract_progress_load_detail($company, $contractNo);
     } elseif ($customerNo !== '') {
         contract_progress_emit_step_plan(['customer', 'contracts']);
-
-        contract_progress_emit(['step' => 'customer', 'status' => 'start']);
+        contract_progress_emit_step('customer', 'start');
         contract_fetch_customer_by_no($company, $customerNo);
-        contract_progress_emit(['step' => 'customer', 'status' => 'done']);
-
-        contract_progress_emit(['step' => 'contracts', 'status' => 'start']);
+        contract_progress_emit_step('customer', 'done');
+        contract_progress_emit_step('contracts', 'start');
         contract_fetch_contracts_for_customer($company, $customerNo);
-        contract_progress_emit(['step' => 'contracts', 'status' => 'done']);
+        contract_progress_emit_step('contracts', 'done');
     } elseif ($searchQuery !== '') {
         $searchResult = contract_progress_search($company, $searchQuery);
-
         $kind = (string) ($searchResult['kind'] ?? 'empty');
         if ($kind === 'contract') {
             $resolvedContractNo = trim((string) ($searchResult['contract_no'] ?? ''));
             if ($resolvedContractNo !== '') {
-                contract_progress_load_detail(
+                $contractNo = $resolvedContractNo;
+                $contractDetailResult = contract_progress_load_detail(
                     $company,
                     $resolvedContractNo,
                     3600,
@@ -479,6 +335,12 @@ try {
         }
     }
 
+    $prefetchKey = contract_portal_prefetch_key($company, $contractNo, $customerNo, $searchQuery);
+    $pageState = contract_load_page_state($company, $contractNo, $customerNo, $searchQuery, 3600, $contractDetailResult);
+    contract_portal_store_prefetch($prefetchKey, $pageState);
+
+    contract_progress_emit_step_plan(['pagina']);
+    contract_progress_emit_step('pagina', 'done');
     contract_progress_emit(['complete' => true]);
 } catch (Throwable $loadError) {
     contract_progress_emit(['error' => true]);
