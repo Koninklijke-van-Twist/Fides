@@ -97,8 +97,21 @@ function portal_render_report_links(array $workorder): string
  */
 
 $companies = contract_companies_for_page();
-$company = trim((string) ($_GET['company'] ?? ($companies[0] ?? '')));
-if ($company === '' || !in_array($company, $companies, true)) {
+$prefEmail = strtolower(trim((string) ($_SESSION['user']['email'] ?? '')));
+$savedCompany = '';
+if ($prefEmail !== '') {
+    $savedCompany = trim((string) (loadUserPrefs($prefEmail)['company'] ?? ''));
+}
+
+$requestedCompany = trim((string) ($_GET['company'] ?? ''));
+if ($requestedCompany !== '' && in_array($requestedCompany, $companies, true)) {
+    $company = $requestedCompany;
+    if ($prefEmail !== '' && $requestedCompany !== $savedCompany) {
+        saveUserPref($prefEmail, 'company', $requestedCompany);
+    }
+} elseif ($savedCompany !== '' && in_array($savedCompany, $companies, true)) {
+    $company = $savedCompany;
+} else {
     $company = (string) ($companies[0] ?? '');
 }
 
