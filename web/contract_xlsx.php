@@ -577,7 +577,7 @@ function contract_build_contract_export_xlsx(string $company, array $contractDet
         $workorders = array_values(array_filter(
             is_array($group['workorders'] ?? null) ? $group['workorders'] : [],
             static function ($workorder): bool {
-                return is_array($workorder) && contract_workorder_has_report_links($workorder);
+                return is_array($workorder) && trim((string) ($workorder['no'] ?? '')) !== '';
             }
         ));
 

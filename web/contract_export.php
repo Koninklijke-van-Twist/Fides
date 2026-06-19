@@ -41,7 +41,7 @@ try {
 
     $workorders = is_array($contractDetail['workorders'] ?? null) ? $contractDetail['workorders'] : [];
     $workorders = array_values(array_filter($workorders, static function ($workorder): bool {
-        return is_array($workorder) && contract_workorder_has_report_links($workorder);
+        return is_array($workorder) && trim((string) ($workorder['no'] ?? '')) !== '';
     }));
 
     if ($workorders === []) {

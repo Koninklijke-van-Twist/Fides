@@ -105,6 +105,61 @@ function portal_filter_workorders_with_reports(array $workorders): array
     }));
 }
 
+function portal_contract_count_label(int $count): string
+{
+    if ($count === 1) {
+        return LOC('contract.customer.contract_count_one');
+    }
+
+    return LOC('contract.customer.contract_count_many', (string) $count);
+}
+
+function portal_render_component_motor_info(array $card, string $title = ''): string
+{
+    $rows = [];
+    $manufacturer = trim((string) ($card['manufacturer_code'] ?? ''));
+    $model = trim((string) ($card['manufacturer_model'] ?? ''));
+    if ($manufacturer !== '') {
+        $rows[] = [LOC('contract.col.manufacturer'), $manufacturer];
+    }
+    if ($model !== '') {
+        $rows[] = [LOC('contract.col.manufacturer_model'), $model];
+    }
+
+    $motorType = trim((string) ($card['sub_entity_description'] ?? ''));
+    if ($motorType === '') {
+        $motorType = trim((string) ($card['sub_entity'] ?? ''));
+    }
+    if ($motorType !== '') {
+        $rows[] = [LOC('contract.col.motor_type'), $motorType];
+    }
+
+    $variant = trim((string) ($card['description'] ?? ''));
+    if ($variant !== '' && strcasecmp($variant, trim($title)) !== 0) {
+        $rows[] = [LOC('contract.col.model_variant'), $variant];
+    }
+
+    $serialNo = trim((string) ($card['serial_no'] ?? ''));
+    if ($serialNo !== '') {
+        $rows[] = [LOC('contract.col.serial'), $serialNo];
+    }
+
+    if ($rows === []) {
+        return '';
+    }
+
+    $html = '<div class="contract-component-meta">';
+    foreach ($rows as $row) {
+        $html .= '<div class="contract-meta-row">'
+            . '<span class="contract-meta-label">' . portal_h($row[0]) . '</span>'
+            . '<span>' . portal_h($row[1]) . '</span>'
+            . '</div>';
+    }
+    $html .= '</div>';
+
+    return $html;
+}
+
 function portal_render_component_features(array $features): string
 {
     if ($features === []) {
@@ -138,7 +193,10 @@ function portal_render_component_features(array $features): string
         return '';
     }
 
-    return '<ul class="contract-feature-list">' . implode('', $items) . '</ul>';
+    return '<details class="contract-extra-info">'
+        . '<summary>' . portal_h(LOC('contract.component.extra_info')) . '</summary>'
+        . '<ul class="contract-feature-list">' . implode('', $items) . '</ul>'
+        . '</details>';
 }
 
 function portal_export_url(string $company, string $contractNo): string
@@ -252,10 +310,7 @@ $exportContractNo = $contractNo;
 if ($view === 'contract' && is_array($contractDetail)) {
     $exportContractRow = is_array($contractDetail['contract'] ?? null) ? $contractDetail['contract'] : [];
     $exportContractNo = trim((string) ($exportContractRow['contract_no'] ?? $contractNo));
-    $exportWorkordersForButton = portal_filter_workorders_with_reports(
-        is_array($contractDetail['workorders'] ?? null) ? $contractDetail['workorders'] : []
-    );
-    $showContractExport = $exportWorkordersForButton !== [];
+    $showContractExport = $exportContractNo !== '';
 }
 
 ?><!DOCTYPE html>
@@ -288,6 +343,15 @@ if ($view === 'contract' && is_array($contractDetail)) {
         .contract-alert { border: 1px solid #fecaca; background: #fef2f2; color: var(--kvt-danger); border-radius: 10px; padding: 12px 14px; margin-bottom: 16px; }
         .contract-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
         .contract-list-item { border: 1px solid var(--kvt-line); border-radius: 10px; padding: 12px 14px; }
+        .contract-list-item-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+        .contract-list-item-top a { flex: 1 1 auto; min-width: 0; }
+        .contract-list-badge { flex: 0 0 auto; background: #e8eef8; color: var(--kvt-main-blue); font-size: 0.82rem; font-weight: 700; padding: 4px 10px; border-radius: 999px; white-space: nowrap; }
+        .contract-component-meta { margin-top: 8px; }
+        .contract-extra-info { margin-top: 10px; border: 1px solid var(--kvt-line); border-radius: 10px; padding: 0 12px 10px; }
+        .contract-extra-info summary { cursor: pointer; font-weight: 700; padding: 10px 0; color: var(--kvt-main-blue); list-style: none; }
+        .contract-extra-info summary::-webkit-details-marker { display: none; }
+        .contract-extra-info[open] summary { border-bottom: 1px solid var(--kvt-line); margin-bottom: 8px; }
+        .contract-extra-info .contract-feature-list { margin-top: 0; }
         .contract-list-item a { color: var(--kvt-main-blue); text-decoration: none; font-weight: 700; }
         .contract-meta { display: grid; gap: 8px; margin-bottom: 12px; }
         .contract-meta-row { display: flex; flex-wrap: wrap; gap: 8px 16px; }
@@ -443,9 +507,15 @@ if ($view === 'contract' && is_array($contractDetail)) {
                 <?php foreach ($searchResult['customers'] as $customerRow): ?>
                     <?php if (!is_array($customerRow)) { continue; } ?>
                     <li class="contract-list-item">
-                        <a class="contract-nav" href="<?= portal_h(portal_url(['company' => $company, 'customer' => (string) ($customerRow['no'] ?? ''), 'q' => null, 'contract' => null])) ?>">
-                            <?= portal_h((string) ($customerRow['name'] ?? '')) ?>
-                        </a>
+                        <div class="contract-list-item-top">
+                            <a class="contract-nav" href="<?= portal_h(portal_url(['company' => $company, 'customer' => (string) ($customerRow['no'] ?? ''), 'q' => null, 'contract' => null])) ?>">
+                                <?= portal_h((string) ($customerRow['name'] ?? '')) ?>
+                            </a>
+                            <?php $contractCount = (int) ($customerRow['contract_count'] ?? 0); ?>
+                            <?php if ($contractCount > 0): ?>
+                                <span class="contract-list-badge"><?= portal_h(portal_contract_count_label($contractCount)) ?></span>
+                            <?php endif; ?>
+                        </div>
                         <div class="contract-muted"><?= portal_h((string) ($customerRow['no'] ?? '')) ?></div>
                     </li>
                 <?php endforeach; ?>
@@ -563,10 +633,13 @@ if ($view === 'contract' && is_array($contractDetail)) {
                         <h3><?= portal_h(portal_component_label($group)) ?></h3>
                         <div class="contract-muted">
                             <?= portal_h(LOC('contract.col.component')) ?>: <?= portal_h((string) ($group['component_no'] ?? '')) ?>
-                            <?php if (trim((string) ($card['serial_no'] ?? '')) !== ''): ?>
-                                · <?= portal_h(LOC('contract.col.serial')) ?> <?= portal_h((string) $card['serial_no']) ?>
-                            <?php endif; ?>
                         </div>
+                        <?php
+                        $motorInfoHtml = portal_render_component_motor_info($card, portal_component_label($group));
+                        if ($motorInfoHtml !== ''):
+                        ?>
+                            <?= $motorInfoHtml ?>
+                        <?php endif; ?>
                         <?php
                         $groupFeatures = is_array($group['features'] ?? null) ? $group['features'] : [];
                         $featuresHtml = portal_render_component_features($groupFeatures);

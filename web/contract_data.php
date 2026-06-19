@@ -251,7 +251,57 @@ function contract_search_customers_by_name(string $company, string $query, int $
         return strcasecmp((string) ($left['name'] ?? ''), (string) ($right['name'] ?? ''));
     });
 
+    if ($customers !== []) {
+        $counts = contract_fetch_contract_counts_for_customers(
+            $company,
+            array_column($customers, 'no'),
+            $ttl
+        );
+        foreach ($customers as $index => $customer) {
+            $customerNo = (string) ($customer['no'] ?? '');
+            $customers[$index]['contract_count'] = $counts[$customerNo] ?? 0;
+        }
+    }
+
     return $customers;
+}
+
+function contract_fetch_contract_counts_for_customers(string $company, array $customerNos, int $ttl = 3600): array
+{
+    $customerNos = array_values(array_unique(array_filter(array_map(static function ($value): string {
+        return trim((string) $value);
+    }, $customerNos))));
+
+    if ($customerNos === []) {
+        return [];
+    }
+
+    $counts = array_fill_keys($customerNos, 0);
+
+    foreach (array_chunk($customerNos, 10) as $chunk) {
+        $filters = [];
+        foreach ($chunk as $customerNo) {
+            $filters[] = "Customer_No eq '" . contract_escape_odata_string($customerNo) . "'";
+        }
+
+        $rows = contract_try_fetch_rows($company, 'AppMaintenanceContracts', [
+            '$select' => 'Contract_No,Customer_No',
+            '$filter' => '(' . implode(' or ', $filters) . ')',
+            '$top' => '500',
+        ], $ttl);
+
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $customerNo = trim((string) ($row['Customer_No'] ?? ''));
+            if ($customerNo !== '' && isset($counts[$customerNo])) {
+                $counts[$customerNo]++;
+            }
+        }
+    }
+
+    return $counts;
 }
 
 function contract_contract_exists_on_workorders(string $company, string $contractNo, int $ttl = 3600): bool
@@ -558,11 +608,23 @@ function contract_fetch_component_cards(
             $filters[] = "No eq '" . contract_escape_odata_string($componentNo) . "'";
         }
 
+        $filter = '(' . implode(' or ', $filters) . ')';
+        $selectExtended = 'No,Description,Serial_No,Main_Entity,Sub_Entity,Sub_Entity_Description,Manufacturer_Code,Manufacturer_Model,Status';
+        $selectBasic = 'No,Description,Serial_No,Main_Entity,Sub_Entity,Status';
+
         $rows = contract_try_fetch_rows($company, 'AppComponentCard', [
-            '$select' => 'No,Description,Serial_No,Main_Entity,Sub_Entity,Status',
-            '$filter' => '(' . implode(' or ', $filters) . ')',
+            '$select' => $selectExtended,
+            '$filter' => $filter,
             '$top' => '100',
         ], $ttl);
+
+        if ($rows === []) {
+            $rows = contract_try_fetch_rows($company, 'AppComponentCard', [
+                '$select' => $selectBasic,
+                '$filter' => $filter,
+                '$top' => '100',
+            ], $ttl);
+        }
 
         foreach ($rows as $row) {
             if (!is_array($row)) {
@@ -578,6 +640,9 @@ function contract_fetch_component_cards(
                 'serial_no' => trim((string) ($row['Serial_No'] ?? '')),
                 'main_entity' => trim((string) ($row['Main_Entity'] ?? '')),
                 'sub_entity' => trim((string) ($row['Sub_Entity'] ?? '')),
+                'sub_entity_description' => trim((string) ($row['Sub_Entity_Description'] ?? '')),
+                'manufacturer_code' => trim((string) ($row['Manufacturer_Code'] ?? '')),
+                'manufacturer_model' => trim((string) ($row['Manufacturer_Model'] ?? '')),
                 'status' => trim((string) ($row['Status'] ?? '')),
             ];
         }
@@ -720,6 +785,9 @@ function contract_build_component_groups(array $workorders, array $tasks, array 
                 'serial_no' => '',
                 'main_entity' => '',
                 'sub_entity' => '',
+                'sub_entity_description' => '',
+                'manufacturer_code' => '',
+                'manufacturer_model' => '',
                 'status' => '',
             ];
         }
