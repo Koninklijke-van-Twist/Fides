@@ -33,7 +33,7 @@ function contract_build_progress_chunk_step_ids(string $prefix, int $itemCount, 
     return $stepIds;
 }
 
-function contract_count_entity_rows(string $company, string $entitySet, string $filter, int $ttl = 3600): ?int
+function contract_count_entity_rows(string $company, string $entitySet, string $filter, int $ttl = 3600, string $select = ''): ?int
 {
     global $baseUrl;
     // Lege $baseUrl is geldig zolang Mímir antwoordt; na fallback herschrijft odata.php naar BC.
@@ -46,11 +46,15 @@ function contract_count_entity_rows(string $company, string $entitySet, string $
     try {
         $environment = auth_get_environment_for_company($company, $ttl);
         $auth = auth_get_auth_for_environment($environment);
-        $url = contract_company_entity_url($odataBaseUrl, $environment, $company, $entitySet, [
+        $countQuery = [
             '$filter' => $filter,
             '$count' => 'true',
             '$top' => '0',
-        ]);
+        ];
+        if ($select !== '') {
+            $countQuery['$select'] = $select;
+        }
+        $url = contract_company_entity_url($odataBaseUrl, $environment, $company, $entitySet, $countQuery);
         // Mímir levert rijen (synthetische @odata.count). Valt Mímir uit, dan leest
         // odata_get_json de pre-Mímir BC-response, inclusief @odata.count.
         $response = odata_get_json($url, $auth, $ttl);
@@ -182,7 +186,7 @@ function contract_fetch_contracts_for_customer(string $company, string $customer
     }
 
     $rows = contract_try_fetch_rows($company, 'AppMaintenanceContracts', [
-        '$select' => 'Contract_No,Contract_Type,Description,Customer_No,Name,Status,Starting_Date,End_Date',
+        '$select' => 'Contract_No,Description,Status,Starting_Date,End_Date',
         '$filter' => "Customer_No eq '" . $escaped . "'",
         '$orderby' => 'Contract_No desc',
         '$top' => '100',
@@ -210,7 +214,7 @@ function contract_fetch_customer_by_no(string $company, string $customerNo, int 
     }
 
     $rows = contract_try_fetch_rows($company, 'AppCustomerCard', [
-        '$select' => 'No,Name,Search_Name',
+        '$select' => 'No,Name',
         '$filter' => "No eq '" . $escaped . "'",
         '$top' => '1',
     ], $ttl);
@@ -235,7 +239,7 @@ function contract_search_customers_by_name(string $company, string $query, int $
     $customers = [];
     foreach ($filters as $filter) {
         $rows = contract_try_fetch_rows($company, 'AppCustomerCard', [
-            '$select' => 'No,Name,Search_Name',
+            '$select' => 'No,Name',
             '$filter' => $filter,
             '$top' => '15',
         ], $ttl);
@@ -291,7 +295,7 @@ function contract_fetch_contract_counts_for_customers(string $company, array $cu
         }
 
         $rows = contract_try_fetch_rows($company, 'AppMaintenanceContracts', [
-            '$select' => 'Contract_No,Customer_No',
+            '$select' => 'Customer_No',
             '$filter' => '(' . implode(' or ', $filters) . ')',
             '$top' => '500',
         ], $ttl);
@@ -422,7 +426,7 @@ function contract_fetch_workorders_for_contract(
     }
 
     $query = [
-        '$select' => 'No,Contract_No,Component_No,Component_Description,Status,Task_Code,KVT_Report_Status,KVT_URL_Workorder_Report_PDF,KVT_URL_Workorder_Report_Excel',
+        '$select' => 'No,Component_No,Component_Description,Status,Task_Code,KVT_URL_Workorder_Report_PDF,KVT_URL_Workorder_Report_Excel',
         '$filter' => "Contract_No eq '" . $escaped . "'",
         '$orderby' => 'No desc',
     ];
@@ -445,7 +449,7 @@ function contract_fetch_workorders_for_contract(
         contract_emit_accurate_chunk_plan(
             $emitStepPlan,
             'workorders',
-            contract_count_entity_rows($company, 'LVS_MainWorkOrderCard', $query['$filter'], $ttl)
+            contract_count_entity_rows($company, 'LVS_MainWorkOrderCard', $query['$filter'], $ttl, 'No')
         );
 
         $skip = 0;
@@ -501,7 +505,7 @@ function contract_fetch_component_tasks_for_contract(
     }
 
     $query = [
-        '$select' => 'Component_No,Contract_No,Task_Code,Description,Main_Entity,Contract_Status',
+        '$select' => 'Component_No',
         '$filter' => "Contract_No eq '" . $escaped . "'",
     ];
 
@@ -514,7 +518,7 @@ function contract_fetch_component_tasks_for_contract(
         contract_emit_accurate_chunk_plan(
             $emitStepPlan,
             'tasks',
-            contract_count_entity_rows($company, 'AppComponentCardTasks', $query['$filter'], $ttl)
+            contract_count_entity_rows($company, 'AppComponentCardTasks', $query['$filter'], $ttl, 'Component_No')
         );
 
         $skip = 0;
@@ -615,8 +619,8 @@ function contract_fetch_component_cards(
         }
 
         $filter = '(' . implode(' or ', $filters) . ')';
-        $selectExtended = 'No,Description,Serial_No,Main_Entity,Sub_Entity,Sub_Entity_Description,Manufacturer_Code,Manufacturer_Model,Status';
-        $selectBasic = 'No,Description,Serial_No,Main_Entity,Sub_Entity,Status';
+        $selectExtended = 'No,Description,Serial_No,Sub_Entity,Sub_Entity_Description,Manufacturer_Code,Manufacturer_Model';
+        $selectBasic = 'No,Description,Serial_No,Sub_Entity';
 
         $rows = contract_try_fetch_rows($company, 'AppComponentCard', [
             '$select' => $selectExtended,

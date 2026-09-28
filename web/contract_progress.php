@@ -71,7 +71,7 @@ function contract_progress_search_customers_by_name(string $company, string $que
     foreach ($filters as $stepId => $filter) {
         contract_progress_emit_step($stepId, 'start');
         $rows = contract_try_fetch_rows($company, 'AppCustomerCard', [
-            '$select' => 'No,Name,Search_Name',
+            '$select' => 'No,Name',
             '$filter' => $filter,
             '$top' => '15',
         ], $ttl);
