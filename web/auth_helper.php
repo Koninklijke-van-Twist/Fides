@@ -78,10 +78,19 @@ function auth_get_active_environments(): array
     }
 
     $known = is_array($auth_list ?? null) ? array_keys($auth_list) : [];
-    if ($configured !== []) {
+    $fallbackActive = auth_mimir_enabled()
+        && function_exists('odata_mimir_circuit_open')
+        && odata_mimir_circuit_open();
+    // Buiten de fallback blijft een lege $auth_list de geconfigureerde lijst wissen.
+    // Tijdens de fallback blijft de primaire environment staan, zodat $auth die kan bedienen.
+    if ($configured !== [] && !($fallbackActive && $known === [])) {
         $knownMap = array_fill_keys($known, true);
         $configured = array_values(array_filter($configured, static function (string $item) use ($knownMap): bool {
             return isset($knownMap[$item]);
+        }));
+    } elseif ($fallbackActive && $known === []) {
+        $configured = array_values(array_filter($configured, static function (string $item): bool {
+            return strcasecmp($item, 'mimir') !== 0;
         }));
     }
 
@@ -91,6 +100,16 @@ function auth_get_active_environments(): array
 
     if ($configured !== []) {
         return $configured;
+    }
+
+    if ($fallbackActive) {
+        $snapshot = $GLOBALS['fides_bc_primary_environment'] ?? null;
+        if (is_string($snapshot)) {
+            $snapshot = trim($snapshot);
+            if ($snapshot !== '' && strcasecmp($snapshot, 'mimir') !== 0) {
+                return [$snapshot];
+            }
+        }
     }
 
     // Geen lokale BC-config: bij Mímir environments afleiden uit companies.php.
@@ -135,6 +154,66 @@ function auth_get_primary_environment(): string
 }
 
 /**
+ * Bewaar $environment/$auth van vóór auth_set_current_company_context ze in Mímir-modus wist.
+ */
+function auth_remember_direct_bc_fallback_state(): void
+{
+    global $auth;
+    if (!array_key_exists('fides_bc_primary_environment', $GLOBALS)) {
+        $primary = '';
+        if (function_exists('odata_bc_environment')) {
+            $resolved = odata_bc_environment();
+            if (is_string($resolved)) {
+                $primary = trim($resolved);
+            }
+        }
+        $GLOBALS['fides_bc_primary_environment'] = $primary;
+    }
+    if (!array_key_exists('fides_bc_auth_preserved', $GLOBALS)) {
+        $GLOBALS['fides_bc_auth_preserved'] = (isset($auth) && is_array($auth)) ? $auth : null;
+    }
+}
+
+function auth_direct_fallback_active(): bool
+{
+    return auth_mimir_enabled()
+        && function_exists('odata_mimir_circuit_open')
+        && odata_mimir_circuit_open();
+}
+
+/**
+ * @return array<string, mixed>|null
+ */
+function auth_shared_bc_auth(): ?array
+{
+    global $auth;
+    if (isset($auth) && is_array($auth) && function_exists('odata_auth_is_usable') && odata_auth_is_usable($auth)) {
+        return $auth;
+    }
+    if (function_exists('odata_bc_preserved_auth')) {
+        return odata_bc_preserved_auth();
+    }
+    $preserved = $GLOBALS['fides_bc_auth_preserved'] ?? null;
+    if (is_array($preserved) && function_exists('odata_auth_is_usable') && odata_auth_is_usable($preserved)) {
+        return $preserved;
+    }
+    return null;
+}
+
+function auth_env_may_use_shared_auth(string $environmentKey): bool
+{
+    global $auth_list;
+    $list = $auth_list ?? null;
+    if (!isset($list) || !is_array($list) || $list === []) {
+        return true;
+    }
+    if (!function_exists('odata_bc_environment_is_primary')) {
+        return false;
+    }
+    return odata_bc_environment_is_primary($environmentKey);
+}
+
+/**
  * Geeft auth-configuratie voor een environment.
  */
 function auth_get_auth_for_environment(string $environment): array
@@ -153,15 +232,35 @@ function auth_get_auth_for_environment(string $environment): array
 
     $auth = $list[$environmentKey] ?? null;
     if (!is_array($auth)) {
-        // Mímir-modus zonder BC-auth: leftover callers krijgen lege auth i.p.v. exception.
-        // Na fallback moet de echte BC-auth gebruikt worden (of de oude exception).
-        if (auth_mimir_uses_proxy()) {
-            return [];
+        foreach ($list as $key => $entry) {
+            if (strcasecmp((string) $key, $environmentKey) === 0 && is_array($entry)) {
+                $auth = $entry;
+                break;
+            }
         }
-        throw new RuntimeException('Geen auth-configuratie gevonden voor environment: ' . $environmentKey);
+    }
+    if (is_array($auth)) {
+        return $auth;
     }
 
-    return $auth;
+    // Mímir-modus zonder BC-auth: leftover callers krijgen lege auth i.p.v. exception.
+    // Na fallback moet de echte BC-auth gebruikt worden (of de oorspronkelijke Mímir-fout).
+    if (auth_mimir_uses_proxy()) {
+        return [];
+    }
+    if (auth_direct_fallback_active() && auth_env_may_use_shared_auth($environmentKey)) {
+        $shared = auth_shared_bc_auth();
+        if (is_array($shared)) {
+            return $shared;
+        }
+    }
+    if (auth_direct_fallback_active()) {
+        $previous = function_exists('odata_mimir_last_error') ? odata_mimir_last_error() : null;
+        if ($previous instanceof Throwable) {
+            throw $previous;
+        }
+    }
+    throw new RuntimeException('Geen auth-configuratie gevonden voor environment: ' . $environmentKey);
 }
 
 /**
@@ -594,6 +693,8 @@ function auth_set_current_company_context(?string $company, int $ttlSeconds = 30
     $companyName = trim((string) $company);
 
     if (auth_mimir_uses_proxy()) {
+        auth_remember_direct_bc_fallback_state();
+
         $targetEnvironment = '';
         if ($companyName !== '') {
             try {
@@ -606,12 +707,20 @@ function auth_set_current_company_context(?string $company, int $ttlSeconds = 30
         }
 
         // BC-auth alleen als lokaal geconfigureerd; anders lege sentinel.
+        // De oorspronkelijke $auth blijft in fides_bc_auth_preserved voor de fallback.
         $targetAuth = [];
         if ($targetEnvironment !== '') {
             global $auth_list;
             $list = is_array($auth_list ?? null) ? $auth_list : [];
             if (isset($list[$targetEnvironment]) && is_array($list[$targetEnvironment])) {
                 $targetAuth = $list[$targetEnvironment];
+            } else {
+                foreach ($list as $key => $entry) {
+                    if (strcasecmp((string) $key, $targetEnvironment) === 0 && is_array($entry)) {
+                        $targetAuth = $entry;
+                        break;
+                    }
+                }
             }
         }
 

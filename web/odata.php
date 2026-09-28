@@ -142,19 +142,29 @@ function odata_auth_is_usable($auth): bool
 
 function odata_bc_base_url(): ?string
 {
-    global $baseUrl;
-    if (!isset($baseUrl) || !is_string($baseUrl)) {
-        return null;
+    $candidates = [];
+    if (isset($GLOBALS['baseUrl']) && is_string($GLOBALS['baseUrl'])) {
+        $candidates[] = $GLOBALS['baseUrl'];
     }
-    $base = trim($baseUrl);
-    if ($base === '' || stripos($base, 'mimir.invalid') !== false) {
-        return null;
+    if (isset($GLOBALS['base']) && is_string($GLOBALS['base'])) {
+        $alias = trim($GLOBALS['base']);
+        if (preg_match('#^[a-z][a-z0-9+.-]*://#i', $alias) === 1) {
+            $candidates[] = $alias;
+        }
     }
-    return $base;
+    foreach ($candidates as $candidate) {
+        $base = trim($candidate);
+        if ($base === '' || stripos($base, 'mimir.invalid') !== false) {
+            continue;
+        }
+        return $base;
+    }
+    return null;
 }
 
 /**
- * Environments uit $environment / $auth_list, zonder de Mímir-only tak.
+ * Environments uit $environment, anders de eerste $auth_list-key.
+ * De primaire $environment blijft staan als die geen eigen $auth_list-entry heeft.
  *
  * @return list<string>
  */
@@ -180,26 +190,26 @@ function odata_bc_environment_names(): array
         }
     }
 
+    if ($configured !== []) {
+        return $configured;
+    }
+
     $known = [];
     if (isset($auth_list) && is_array($auth_list)) {
         foreach (array_keys($auth_list) as $key) {
             $known[] = (string) $key;
         }
     }
-
-    if ($configured !== [] && $known !== []) {
-        $knownMap = array_fill_keys($known, true);
-        $configured = array_values(array_filter($configured, static function (string $item) use ($knownMap): bool {
-            return isset($knownMap[$item]);
-        }));
-    }
-
-    if ($configured !== []) {
-        return $configured;
-    }
-
     if ($known !== []) {
         return [(string) $known[0]];
+    }
+
+    $snapshot = $GLOBALS['fides_bc_primary_environment'] ?? null;
+    if (is_string($snapshot)) {
+        $snapshot = trim($snapshot);
+        if ($snapshot !== '' && strcasecmp($snapshot, 'mimir') !== 0) {
+            return [$snapshot];
+        }
     }
 
     return [];
@@ -238,14 +248,78 @@ function odata_bc_auth_for_environment(?string $env): ?array
     return null;
 }
 
+function odata_bc_auth_list_present(): bool
+{
+    global $auth_list;
+    return isset($auth_list) && is_array($auth_list) && $auth_list !== [];
+}
+
+/**
+ * $auth die auth_set_current_company_context in Mímir-modus heeft vervangen door [].
+ *
+ * @return array<string, mixed>|null
+ */
+function odata_bc_preserved_auth(): ?array
+{
+    $preserved = $GLOBALS['fides_bc_auth_preserved'] ?? null;
+    if (odata_auth_is_usable($preserved)) {
+        return $preserved;
+    }
+    return null;
+}
+
+/**
+ * @return array<string, mixed>|null
+ */
+function odata_bc_shared_auth(): ?array
+{
+    global $auth;
+    if (isset($auth) && odata_auth_is_usable($auth)) {
+        return $auth;
+    }
+    return odata_bc_preserved_auth();
+}
+
+function odata_bc_environment_is_primary(string $env): bool
+{
+    $primary = null;
+    $snapshot = $GLOBALS['fides_bc_primary_environment'] ?? null;
+    if (is_string($snapshot)) {
+        $snapshot = trim($snapshot);
+        if ($snapshot !== '' && strcasecmp($snapshot, 'mimir') !== 0) {
+            $primary = $snapshot;
+        }
+    }
+    if ($primary === null) {
+        $primary = odata_bc_environment();
+    }
+    if ($primary === null || $primary === '') {
+        return false;
+    }
+    $env = trim($env);
+    return $env !== '' && strcasecmp($env, $primary) === 0;
+}
+
+/**
+ * $auth (of meegegeven credentials) mag als er geen $auth_list is,
+ * of als dit environment de primaire $environment is.
+ */
+function odata_bc_may_use_shared_auth(?string $env): bool
+{
+    if (!odata_bc_auth_list_present()) {
+        return true;
+    }
+    return $env !== null && odata_bc_environment_is_primary($env);
+}
+
 function odata_bc_auth_for_fallback(array $passed): ?array
 {
     if (odata_auth_is_usable($passed)) {
         return $passed;
     }
-    global $auth;
-    if (isset($auth) && odata_auth_is_usable($auth)) {
-        return $auth;
+    $shared = odata_bc_shared_auth();
+    if ($shared !== null) {
+        return $shared;
     }
     $fromEnv = odata_bc_auth_for_environment(odata_bc_environment());
     if ($fromEnv !== null) {
@@ -263,17 +337,27 @@ function odata_bc_auth_for_fallback(array $passed): ?array
 }
 
 /**
- * Auth voor een bekend environment komt alleen uit $auth_list.
- * $auth / de primaire env gelden pas als het bedrijf (of het env-segment) onbekend is.
+ * Bekend environment: eigen $auth_list-entry, anders $auth als de lijst leeg is
+ * of dit de primaire environment is. Een ander environment zonder entry weigert.
  *
  * @return array<string, mixed>|null
  */
 function odata_bc_auth_for_resolved(?string $env, bool $known, array $passed): ?array
 {
-    if ($known) {
-        return odata_bc_auth_for_environment($env);
+    if (!$known) {
+        return odata_bc_auth_for_fallback($passed);
     }
-    return odata_bc_auth_for_fallback($passed);
+    $fromList = odata_bc_auth_for_environment($env);
+    if ($fromList !== null) {
+        return $fromList;
+    }
+    if (!odata_bc_may_use_shared_auth($env)) {
+        return null;
+    }
+    if (odata_auth_is_usable($passed)) {
+        return $passed;
+    }
+    return odata_bc_shared_auth();
 }
 
 function odata_bc_mapped_environment(string $company): ?string
@@ -728,7 +812,7 @@ function odata_direct_companies_as_rows(?string $environmentFilter = null): arra
     $out = [];
     $fetched = false;
     foreach ($envs as $env) {
-        $auth = odata_bc_auth_for_environment($env);
+        $auth = odata_bc_auth_for_resolved($env, true, []);
         if ($auth === null) {
             continue;
         }
@@ -880,7 +964,7 @@ function odata_direct_query(string $company, string $table, array $odataQuery, i
     $mapped = odata_bc_mapped_environment($company);
     if ($mapped !== null) {
         $env = $mapped;
-        $auth = odata_bc_auth_for_environment($env);
+        $auth = odata_bc_auth_for_resolved($env, true, []);
     } else {
         $env = odata_bc_environment();
         $auth = odata_bc_auth_for_fallback([]);
