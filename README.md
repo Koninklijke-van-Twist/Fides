@@ -14,4 +14,6 @@ Met `$mimirApi` gezet gaan OData-fetches en company-discovery eerst naar Mímir.
 
 Dat geldt voor de live pagina's (`index.php`, `contract_progress.php`, `contract_export.php`) én voor CLI: er is geen aparte nachtelijke job, maar `php`-scripts die `odata.php` gebruiken krijgen onder `cli` de lange Mímir-timeout (600s). Webverzoeken gebruiken ongeveer 90s, met een connect-timeout van 10s. Zonder `$mimirApi` blijft alleen het bestaande BC-pad actief.
 
+De Mímir-fallback hoort in `web/odata.php`. Tim Falken heeft die uitzondering op de regel “`odata.php` niet wijzigen” goedgekeurd op 2026-09-28.
+
 Zie `web/auth_TEMPLATE.php`.

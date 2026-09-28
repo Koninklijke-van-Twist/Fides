@@ -12,7 +12,7 @@ alwaysApply: true
 
 ## Niet wijzigen
 - Bestand `web/logincheck.php` niet aanpassen.
-- Bestand `web/odata.php` niet aanpassen.
+- Bestand `web/odata.php` niet aanpassen, behalve de Mímir-fallback. Tim Falken heeft op 2026-09-28 goedgekeurd dat die fallback (circuit en directe BC-route) in `web/odata.php` blijft. Endpoint-handlers en `injectTimerHtml` blijven zoals ze zijn.
 - Bestand `web/auth.php` alleen aanpassen na expliciete gebruikersvraag.
 
 ## Data en logica
