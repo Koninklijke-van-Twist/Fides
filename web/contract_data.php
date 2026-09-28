@@ -36,7 +36,7 @@ function contract_build_progress_chunk_step_ids(string $prefix, int $itemCount, 
 function contract_count_entity_rows(string $company, string $entitySet, string $filter, int $ttl = 3600): ?int
 {
     global $baseUrl;
-    // Lege $baseUrl is geldig in Mímir-modus; de OData-URL wordt vertaald.
+    // Lege $baseUrl is geldig zolang Mímir antwoordt; na fallback herschrijft odata.php naar BC.
     $odataBaseUrl = trim((string) ($baseUrl ?? ''));
 
     if ($filter === '') {
@@ -51,11 +51,9 @@ function contract_count_entity_rows(string $company, string $entitySet, string $
             '$count' => 'true',
             '$top' => '0',
         ]);
-        if (odata_mimir_enabled()) {
-            // Mímir levert rijen i.p.v. @odata.count; tel ze met dezelfde TTL als de fetch.
-            return count(odata_get_all($url, $auth, $ttl));
-        }
-        $response = odata_get_json($url, $auth);
+        // Mímir levert rijen (synthetische @odata.count). Valt Mímir uit, dan leest
+        // odata_get_json de pre-Mímir BC-response, inclusief @odata.count.
+        $response = odata_get_json($url, $auth, $ttl);
         if (isset($response['@odata.count'])) {
             return max(0, (int) $response['@odata.count']);
         }
@@ -117,7 +115,7 @@ function contract_company_entity_url(string $baseUrl, string $environment, strin
 function contract_fetch_rows(string $company, string $entitySet, array $query, int $ttl = 3600): array
 {
     global $baseUrl;
-    // Lege $baseUrl is geldig in Mímir-modus; odata_get_all vertaalt het pad.
+    // Lege $baseUrl is geldig zolang Mímir antwoordt; na fallback herschrijft odata.php naar BC.
     $odataBaseUrl = trim((string) ($baseUrl ?? ''));
 
     $environment = auth_get_environment_for_company($company, $ttl);
